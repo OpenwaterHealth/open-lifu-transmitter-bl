@@ -1,0 +1,22 @@
+/Debug/
+/Release/
+/build/
+/SEMIHOST/
+
+# STM32CubeIDE local machine files
+.settings/*
+.vscode/*
+*.launch
+.venv/*
+platform.json
+test/libusb-1.0.29
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+test/*.bin
+test/keys
+# Secure Engine key blob: embeds the secret AES-128 firmware key (and the ECDSA
+# public key). Regenerate locally with py-tools/generate_keys.py or
+# py-tools/gen_se_key_s.py. NEVER commit real key material.
+SECoreBin/Startup/se_key.s
