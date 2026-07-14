@@ -174,7 +174,7 @@ static uint8_t do_erase(uint32_t addr)
     return I2C_DFU_STATUS_OK;
 }
 
-static uint8_t do_write(uint8_t *src, uint32_t dest, uint32_t len)
+static uint8_t do_write(const uint8_t *src, uint32_t dest, uint32_t len)
 {
     if (((dest & 7U) != 0U) || (len == 0U))
     {

@@ -793,6 +793,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   * @param  htim : TIM handle
   * @retval None
   */
+// cppcheck-suppress constParameterPointer -- must match pTIM_CallbackTypeDef (non-const TIM_HandleTypeDef *)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
