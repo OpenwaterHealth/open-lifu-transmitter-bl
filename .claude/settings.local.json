@@ -5,7 +5,9 @@
       "Bash(gh auth *)",
       "Bash(gh repo *)",
       "Bash(base64 -w0 \"C:/Users/gvigelet/CURRENT_WORK/openwater/lifu/bl-keys/transmitter/aes128.bin\")",
-      "Bash(gh secret *)"
+      "Bash(gh secret *)",
+      "Bash(python -m lizard ./Core/Src ./USB_DEVICE/App -C 15 -L 100 -w -x \"*/jsmn.c\" -x \"*/system_stm32l4xx.c\" -x \"*/stm32l4xx_hal_msp.c\" --whitelist lizard_whitelist.csv)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }
