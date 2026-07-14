@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"C:/Users/gvigelet/CURRENT_WORK/openwater/lifu/bl-keys/transmitter\")",
+      "Bash(gh auth *)",
+      "Bash(gh repo *)",
+      "Bash(base64 -w0 \"C:/Users/gvigelet/CURRENT_WORK/openwater/lifu/bl-keys/transmitter/aes128.bin\")",
+      "Bash(gh secret *)"
+    ]
+  }
+}
