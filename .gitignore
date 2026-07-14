@@ -20,3 +20,4 @@ test/keys
 # public key). Regenerate locally with py-tools/generate_keys.py or
 # py-tools/gen_se_key_s.py. NEVER commit real key material.
 SECoreBin/Startup/se_key.s
+".claude/" 

@@ -7,7 +7,14 @@
       "Bash(base64 -w0 \"C:/Users/gvigelet/CURRENT_WORK/openwater/lifu/bl-keys/transmitter/aes128.bin\")",
       "Bash(gh secret *)",
       "Bash(python -m lizard ./Core/Src ./USB_DEVICE/App -C 15 -L 100 -w -x \"*/jsmn.c\" -x \"*/system_stm32l4xx.c\" -x \"*/stm32l4xx_hal_msp.c\" --whitelist lizard_whitelist.csv)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(git rev-list *)",
+      "Bash(gh run *)",
+      "Bash(grep -iE \"sbom|cyclonedx|syft|\\\\.json$\")",
+      "Bash(grep -iE \"\\\\.\\(sh|ps1|py\\)$\")",
+      "Bash(awk -F/ '{print $1\"/\"$2}')",
+      "Bash(awk -F/ '{print $1\"/\"$2\"/\"$3}')",
+      "Bash(grep -iE \"readme|version|release|\\\\.h$\")"
     ]
   }
 }

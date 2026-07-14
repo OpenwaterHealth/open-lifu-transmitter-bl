@@ -1,0 +1,180 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:6f1a2b3c-4d5e-4f60-8a1b-9c0d1e2f3a4b",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-14T00:00:00Z",
+    "authors": [
+      { "name": "Openwater Firmware Engineering" }
+    ],
+    "tools": [
+      {
+        "vendor": "Openwater",
+        "name": "curated-sbom",
+        "version": "1.0",
+        "notes": "Hand-curated CycloneDX SBOM. Component versions are traced to committed source: STM32Cube FW_L4 pack from open-lifu-transmitter-bl.ioc; CMSIS from cmsis_version.h / stm32l4xx.h; Secure Engine and Cryptographic library from their Release_Notes.html; LwRB from Core/Src/lwrb.c. The STM32L4xx HAL Driver and USB Device Library headers in this tree are stripped of their internal version macros, so they are pinned to the STM32Cube FW_L4 V1.18.2 pack that delivers them."
+      }
+    ],
+    "component": {
+      "bom-ref": "openwater-lifu-tx-bl",
+      "type": "firmware",
+      "group": "cc.openwater",
+      "name": "open-lifu-transmitter-bl",
+      "version": "17bac54",
+      "description": "Openwater LIFU transmitter secure bootloader (SBSFU) firmware for STM32L443.",
+      "publisher": "Openwater",
+      "properties": [
+        { "name": "openwater:version-source", "value": "git describe (injected at build time as FW_VERSION)" },
+        { "name": "openwater:mcu", "value": "STM32L443xx (Arm Cortex-M4)" }
+      ]
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "stm32cube-fw-l4",
+      "type": "framework",
+      "group": "com.st",
+      "name": "STM32Cube MCU Package for STM32L4 (FW_L4)",
+      "version": "1.18.2",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "STM32Cube firmware package delivering the STM32L4 HAL/LL drivers, CMSIS device files, and ST middleware used by this project.",
+      "licenses": [ { "license": { "id": "Apache-2.0" } } ],
+      "properties": [
+        { "name": "openwater:evidence", "value": "open-lifu-transmitter-bl.ioc: ProjectManager.FirmwarePackage=STM32Cube FW_L4 V1.18.2" }
+      ]
+    },
+    {
+      "bom-ref": "stm32l4xx-hal-driver",
+      "type": "library",
+      "group": "com.st",
+      "name": "STM32L4xx HAL Driver",
+      "version": "1.18.2",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "Hardware abstraction layer drivers for STM32L4. Version pinned to the STM32Cube FW_L4 pack (internal HAL version macros are not present in the committed headers).",
+      "licenses": [ { "license": { "id": "BSD-3-Clause" } } ],
+      "properties": [
+        { "name": "openwater:version-basis", "value": "STM32Cube FW_L4 V1.18.2 pack" }
+      ]
+    },
+    {
+      "bom-ref": "cmsis-core",
+      "type": "library",
+      "group": "org.arm",
+      "name": "CMSIS Core (Cortex-M)",
+      "version": "5.3.0",
+      "supplier": { "name": "Arm Limited" },
+      "publisher": "Arm Limited",
+      "description": "Cortex Microcontroller Software Interface Standard core headers.",
+      "licenses": [ { "license": { "id": "Apache-2.0" } } ],
+      "purl": "pkg:github/ARM-software/CMSIS_5@5.3.0",
+      "properties": [
+        { "name": "openwater:evidence", "value": "Drivers/CMSIS/Include/cmsis_version.h: __CM_CMSIS_VERSION_MAIN=5, __CM_CMSIS_VERSION_SUB=3" }
+      ]
+    },
+    {
+      "bom-ref": "cmsis-device-stm32l4xx",
+      "type": "library",
+      "group": "com.st",
+      "name": "CMSIS Device STM32L4xx",
+      "version": "1.7.5",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "CMSIS device support (headers, startup, system) for STM32L4xx.",
+      "licenses": [ { "license": { "id": "Apache-2.0" } } ],
+      "properties": [
+        { "name": "openwater:evidence", "value": "Drivers/CMSIS/Device/ST/STM32L4xx/Include/stm32l4xx.h: __STM32L4_CMSIS_VERSION 1.7.5.0" }
+      ]
+    },
+    {
+      "bom-ref": "stm32-usb-device-library",
+      "type": "library",
+      "group": "com.st",
+      "name": "STM32 USB Device Library",
+      "version": "1.18.2",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "ST USB device core plus DFU class, used by the USB DFU bootloader path. Version pinned to the STM32Cube FW_L4 pack (internal library version macros are not present in the committed headers).",
+      "licenses": [ { "license": { "name": "SLA0044 (ST Ultimate Liberty)" } } ],
+      "properties": [
+        { "name": "openwater:version-basis", "value": "STM32Cube FW_L4 V1.18.2 pack" }
+      ]
+    },
+    {
+      "bom-ref": "stm32-secure-engine",
+      "type": "library",
+      "group": "com.st",
+      "name": "STM32 Secure Engine",
+      "version": "2.5.4",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "Secure Engine (SE) protected firmware services used by the SBSFU secure bootloader.",
+      "licenses": [ { "license": { "name": "SLA0044 (ST Ultimate Liberty)" } } ],
+      "properties": [
+        { "name": "openwater:evidence", "value": "Middlewares/ST/STM32_Secure_Engine/Release_Notes.html: v2.5.4 / 26-September-2025" }
+      ]
+    },
+    {
+      "bom-ref": "stm32-cryptographic-library",
+      "type": "library",
+      "group": "com.st",
+      "name": "STM32 Cryptographic Library",
+      "version": "3.1.5",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "STM32 cryptographic middleware (AES, ECC, hashing) used for secure boot image verification and decryption.",
+      "licenses": [ { "license": { "name": "SLA0044 (ST Ultimate Liberty)" } } ],
+      "properties": [
+        { "name": "openwater:evidence", "value": "Middlewares/ST/STM32_Cryptographic/Release_Notes.html: V3.1.5 / 08-January-2021" }
+      ]
+    },
+    {
+      "bom-ref": "lwrb",
+      "type": "library",
+      "group": "eu.majerle",
+      "name": "LwRB",
+      "version": "2.0.0",
+      "supplier": { "name": "Tilen Majerle" },
+      "author": "Tilen Majerle",
+      "publisher": "Tilen Majerle",
+      "description": "Lightweight ring buffer library (Core/Src/lwrb.c).",
+      "licenses": [ { "license": { "id": "MIT" } } ],
+      "purl": "pkg:github/MaJerle/lwrb@v2.0.0",
+      "properties": [
+        { "name": "openwater:evidence", "value": "Core/Src/lwrb.c: Version: v2.0.0" }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "openwater-lifu-tx-bl",
+      "dependsOn": [
+        "stm32cube-fw-l4",
+        "stm32l4xx-hal-driver",
+        "cmsis-core",
+        "cmsis-device-stm32l4xx",
+        "stm32-usb-device-library",
+        "stm32-secure-engine",
+        "stm32-cryptographic-library",
+        "lwrb"
+      ]
+    },
+    {
+      "ref": "stm32cube-fw-l4",
+      "dependsOn": [
+        "stm32l4xx-hal-driver",
+        "cmsis-device-stm32l4xx",
+        "stm32-usb-device-library",
+        "stm32-secure-engine",
+        "stm32-cryptographic-library"
+      ]
+    },
+    { "ref": "stm32l4xx-hal-driver", "dependsOn": [ "cmsis-device-stm32l4xx" ] },
+    { "ref": "cmsis-device-stm32l4xx", "dependsOn": [ "cmsis-core" ] },
+    { "ref": "stm32-usb-device-library", "dependsOn": [ "stm32l4xx-hal-driver" ] },
+    { "ref": "stm32-secure-engine", "dependsOn": [ "stm32-cryptographic-library" ] },
+    { "ref": "lwrb", "dependsOn": [] }
+  ]
+}
