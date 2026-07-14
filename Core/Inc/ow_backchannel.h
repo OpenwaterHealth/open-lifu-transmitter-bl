@@ -57,7 +57,7 @@ void OW_BL_Process(void);
  * @brief  UART TX-complete hook, dispatched from HAL_UART_TxCpltCallback (main.c)
  *         in Release builds. Sets the internal transmit-done flag.
  */
-void OW_BL_TxCpltCallback(UART_HandleTypeDef *huart);
+void OW_BL_TxCpltCallback(const UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus
 }

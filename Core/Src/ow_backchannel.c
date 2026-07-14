@@ -86,7 +86,7 @@ typedef struct
  * Low-level helpers
  * ---------------------------------------------------------------------- */
 
-static bool ow_wait_flag(volatile uint8_t *flag, uint32_t budget)
+static bool ow_wait_flag(volatile const uint8_t *flag, uint32_t budget)
 {
     uint32_t i = 0U;
     while (*flag == 0U)
@@ -348,7 +348,7 @@ void OW_BL_Process(void)
     }
 }
 
-void OW_BL_TxCpltCallback(UART_HandleTypeDef *huart)
+void OW_BL_TxCpltCallback(const UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART2)
     {
@@ -361,6 +361,7 @@ void OW_BL_TxCpltCallback(UART_HandleTypeDef *huart)
 }
 
 /* HAL one-wire RX-idle event: HAL calls this (weak override) for both links. */
+// cppcheck-suppress constParameterPointer -- must match pUART_RxEventCallbackTypeDef (non-const UART_HandleTypeDef *)
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
     if (huart->Instance == USART2)

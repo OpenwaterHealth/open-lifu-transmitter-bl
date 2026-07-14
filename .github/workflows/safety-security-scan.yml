@@ -33,8 +33,8 @@ jobs:
                    --suppress=missingIncludeSystem \
                    --suppress=*:Core/Src/lwrb.c \
                    --suppress=*:Core/Src/jsmn.c \
-                   --suppress=*:Core/Src/system_stm32h7xx.c \
-                   --suppress=*:Core/Src/stm32h7xx_hal_msp.c \
+                   --suppress=*:Core/Src/system_stm32l4xx.c \
+                   --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
                    --suppress=*:Core/Src/syscalls.c \
                    ./Core/Src ./USB_DEVICE/App
 
@@ -49,8 +49,8 @@ jobs:
           lizard ./Core/Src ./USB_DEVICE/App \
             -C 15 -L 100 -w \
             -x "*/jsmn.c" \
-            -x "*/system_stm32h7xx.c" \
-            -x "*/stm32h7xx_hal_msp.c" \
+            -x "*/system_stm32l4xx.c" \
+            -x "*/stm32l4xx_hal_msp.c" \
             --whitelist lizard_whitelist.csv
 
       # 3. Vulnerability Scan against the committed SBOM
