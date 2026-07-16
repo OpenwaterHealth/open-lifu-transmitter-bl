@@ -17,13 +17,19 @@ So this driver bypasses the package layer and drives STM32I2CDFUviaMaster
 directly: mass_erase -> write_memory(0x08010000, raw) -> manifest -> reset.
 
 Usage:
-  python program_slave_i2c.py <signed.bin> [--module N] [--i2c-addr 0x72]
+  python program_slave_i2c.py <signed.bin> [--module N] [--i2c-addr 0xNN]
                               [--already-in-dfu] [--dfu-wait 6]
+
+The bootloader's I2C DFU address is resolved automatically: the master's
+one-wire discovery walk assigns a bootloader-mode slave its enumerated
+address (0x20 for module 1, ...), replacing the power-up default 0x72.
+Pass --i2c-addr only to override that resolution.
 """
 from __future__ import annotations
 import argparse, sys, time
 
 from openlifu_sdk.io.LIFUTXDevice import TxDevice
+from openlifu_sdk.io.LIFUConfig import NODE_MODE_BOOTLOADER
 from openlifu_sdk.io.LIFUDFU import STM32I2CDFUviaMaster
 
 SLOT_BASE = 0x08010000   # signed image is written here whole
@@ -43,8 +49,11 @@ def main() -> None:
     ap.add_argument("signed", help="raw signed image from sign_firmware.py")
     ap.add_argument("--module", type=int, default=1,
                     help="slave module index as seen by the master (default 1)")
-    ap.add_argument("--i2c-addr", type=lambda x: int(x, 0), default=0x72,
-                    help="slave bootloader I2C DFU address (default 0x72)")
+    ap.add_argument("--i2c-addr", type=lambda x: int(x, 0), default=None,
+                    help="slave bootloader I2C DFU address (default: query the "
+                         "master's module table — the boot-time one-wire "
+                         "enumeration moves a bootloader-mode slave from 0x72 "
+                         "to its assigned address, 0x20 for module 1)")
     ap.add_argument("--vid", type=lambda x: int(x, 0), default=0x0483)
     ap.add_argument("--pid", type=lambda x: int(x, 0), default=0x57AF,
                     help="master TX VCP PID (default 0x57AF)")
@@ -61,7 +70,7 @@ def main() -> None:
         print(f"WARNING: {args.signed} does not start with 'SFU1' — is this a "
               f"sign_firmware.py image?", file=sys.stderr)
     print(f"signed image : {len(raw)} bytes -> slave slot 0x{SLOT_BASE:08X}")
-    print(f"slave module  : {args.module}   BL I2C addr: 0x{args.i2c_addr:02X}")
+    print(f"slave module  : {args.module}")
 
     tx = TxDevice(vid=args.vid, pid=args.pid, baudrate=args.baud)
     if not tx.connect():
@@ -88,12 +97,31 @@ def main() -> None:
                   f"I2C DFU...")
             time.sleep(args.dfu_wait)
 
-        # 2) Talk to the slave bootloader over I2C passthrough.
-        dfu = STM32I2CDFUviaMaster(uart=tx.uart, i2c_addr=args.i2c_addr)
+        # 2) Resolve the slave bootloader's I2C address.
+        #    The bootloader powers up listening at the default 0x72, but the
+        #    master's one-wire discovery walk (run at master boot, and again
+        #    here) reassigns a bootloader-mode slave to its enumerated address
+        #    (0x20 for module 1, 0x21 for module 2, ...). So 0x72 is only valid
+        #    if the slave entered DFU *after* the last discovery walk — always
+        #    re-enumerate and ask the master where the slave actually is.
+        n = tx.enumerate_modules()
+        print(f"module count  : {n} (after re-enumeration)")
+        mode = tx.get_module_mode(args.module)
+        if mode != NODE_MODE_BOOTLOADER:
+            print(f"ERROR: module {args.module} reports mode {mode}, expected "
+                  f"BOOTLOADER ({NODE_MODE_BOOTLOADER}). Is the slave in DFU?",
+                  file=sys.stderr)
+            sys.exit(3)
+        i2c_addr = args.i2c_addr if args.i2c_addr is not None \
+                   else tx.get_module_i2c_addr(args.module)
+        print(f"slave BL addr : 0x{i2c_addr:02X}")
+
+        # 3) Talk to the slave bootloader over I2C passthrough.
+        dfu = STM32I2CDFUviaMaster(uart=tx.uart, i2c_addr=i2c_addr)
         blver = dfu.get_version()
         print(f"slave BL ver  : {blver.decode(errors='replace') if isinstance(blver, (bytes, bytearray)) else blver}")
 
-        # 3) Program: mass-erase app region, write the raw signed image, manifest.
+        # 4) Program: mass-erase app region, write the raw signed image, manifest.
         print("mass-erasing slave application slot...")
         dfu.mass_erase()
         print("writing image...")
@@ -105,10 +133,14 @@ def main() -> None:
     finally:
         pass
 
-    # 4) Confirm the slave app came back (forwarded OW_CMD_VERSION addr=module).
+    # 5) Confirm the slave app came back (forwarded OW_CMD_VERSION addr=module).
+    #    The freshly booted app waits for a discovery walk before it claims its
+    #    I2C address, so re-enumerate first.
     print(f"waiting {args.dfu_wait:.0f}s for slave app to boot...")
     time.sleep(args.dfu_wait)
     try:
+        n = tx.enumerate_modules()
+        print(f"module count  : {n} (after slave reboot)")
         ver = tx.get_version(module=args.module)
         print(f"slave app ver : {ver}")
         print("SLAVE I2C UPDATE COMPLETE")

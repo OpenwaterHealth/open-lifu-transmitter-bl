@@ -2,9 +2,9 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "serialNumber": "urn:uuid:6f1a2b3c-4d5e-4f60-8a1b-9c0d1e2f3a4b",
-  "version": 1,
+  "version": 2,
   "metadata": {
-    "timestamp": "2026-07-14T00:00:00Z",
+    "timestamp": "2026-07-16T00:00:00Z",
     "authors": [
       { "name": "Openwater Firmware Engineering" }
     ],
@@ -13,7 +13,7 @@
         "vendor": "Openwater",
         "name": "curated-sbom",
         "version": "1.0",
-        "notes": "Hand-curated CycloneDX SBOM. Component versions are traced to committed source: STM32Cube FW_L4 pack from open-lifu-transmitter-bl.ioc; CMSIS from cmsis_version.h / stm32l4xx.h; Secure Engine and Cryptographic library from their Release_Notes.html; LwRB from Core/Src/lwrb.c. The STM32L4xx HAL Driver and USB Device Library headers in this tree are stripped of their internal version macros, so they are pinned to the STM32Cube FW_L4 V1.18.2 pack that delivers them."
+        "notes": "Hand-curated CycloneDX SBOM. Component versions are traced to committed source: STM32Cube FW_L4 pack from open-lifu-transmitter-bl.ioc; CMSIS from cmsis_version.h / stm32l4xx.h; Secure Engine and Cryptographic library from their Release_Notes.html; LwRB from Core/Src/lwrb.c; X-CUBE-SBSFU from the STM32CubeExpansion_SBSFU_V2.8.0 package Release_Notes.html and its ST-published sbom_cdx.json. The STM32L4xx HAL Driver and USB Device Library headers in this tree are stripped of their internal version macros, so they are pinned to the STM32Cube FW_L4 V1.18.2 pack that delivers them."
       }
     ],
     "component": {
@@ -103,6 +103,20 @@
       ]
     },
     {
+      "bom-ref": "x-cube-sbsfu",
+      "type": "application",
+      "group": "com.st",
+      "name": "X-CUBE-SBSFU",
+      "version": "2.8.0",
+      "supplier": { "name": "STMicroelectronics" },
+      "publisher": "STMicroelectronics",
+      "description": "STM32Cube expansion package for Secure Boot and Secure Firmware Update. Provides the SBSFU application code adapted in SBSFU/App, SBSFU/Target, and SECoreBin, and delivers the Secure Engine and Cryptographic middleware.",
+      "licenses": [ { "license": { "name": "SLA0044 (ST Ultimate Liberty)" } } ],
+      "properties": [
+        { "name": "openwater:evidence", "value": "STM32CubeExpansion_SBSFU_V2.8.0 package: Release_Notes.html v2.8.0 / 05-September-2025; ST sbom_cdx.json lists X-CUBE-SBSFU v2.8.0 with STM32_Secure_Engine 2.5.4 and STM32 Cryptographic Middleware v3.1.5, matching the versions committed in this tree" }
+      ]
+    },
+    {
       "bom-ref": "stm32-secure-engine",
       "type": "library",
       "group": "com.st",
@@ -124,10 +138,11 @@
       "version": "3.1.5",
       "supplier": { "name": "STMicroelectronics" },
       "publisher": "STMicroelectronics",
-      "description": "STM32 cryptographic middleware (AES, ECC, hashing) used for secure boot image verification and decryption.",
+      "description": "STM32 cryptographic middleware (AES, ECC, hashing) used for secure boot image verification and decryption. Consumed only by SECoreBin, which includes Fw_Crypto/STM32L4/Inc/crypto.h and links the precompiled Cortex-M4 GCC archive; the resulting SECoreBin.bin is embedded into the SBSFU firmware.",
       "licenses": [ { "license": { "name": "SLA0044 (ST Ultimate Liberty)" } } ],
       "properties": [
-        { "name": "openwater:evidence", "value": "Middlewares/ST/STM32_Cryptographic/Release_Notes.html: V3.1.5 / 08-January-2021" }
+        { "name": "openwater:evidence", "value": "Middlewares/ST/STM32_Cryptographic/Release_Notes.html: V3.1.5 / 08-January-2021 (middleware delivery version, matching the X-CUBE-SBSFU 2.8.0 package SBOM)" },
+        { "name": "openwater:linked-binary", "value": "Middlewares/ST/STM32_Cryptographic/Fw_Crypto/STM32L4/Lib/libSTM32CryptographicV3.0.0_CM4_GCC.a (linked by SECoreBin/CMakeLists.txt); the per-toolchain GCC crypto core inside the V3.1.5 delivery is V3.0.0 - the V3.1.1 archives in the same Lib directory are IAR-only" }
       ]
     },
     {
@@ -156,9 +171,17 @@
         "cmsis-core",
         "cmsis-device-stm32l4xx",
         "stm32-usb-device-library",
+        "x-cube-sbsfu",
         "stm32-secure-engine",
         "stm32-cryptographic-library",
         "lwrb"
+      ]
+    },
+    {
+      "ref": "x-cube-sbsfu",
+      "dependsOn": [
+        "stm32-secure-engine",
+        "stm32-cryptographic-library"
       ]
     },
     {
