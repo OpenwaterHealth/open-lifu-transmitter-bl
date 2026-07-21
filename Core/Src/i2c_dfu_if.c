@@ -48,9 +48,10 @@
 /* Writable flash region (mirrors usbd_dfu_if.c): the SBSFU active application
  * slot ONLY. Unlike the legacy (non-secure) bootloader there is no writable
  * metadata page: the signed image carries its own SFU1 header at the slot
- * base, and the page at 0x0800F800 now holds the anti-rollback version floor
- * (see SBSFU/Target/Src/anti_rollback.c) — a DNLOAD/ERASE aimed there is
- * answered with I2C_DFU_STATUS_BAD_ADDR. */
+ * base. The legacy metadata address 0x0800F800 is now inside the read-only
+ * bootloader region, and the anti-rollback floor log lives above the writable
+ * window at 0x0803F000 (see SBSFU/Target/Src/anti_rollback.c) — a
+ * DNLOAD/ERASE aimed at either is answered with I2C_DFU_STATUS_BAD_ADDR. */
 #define DFU_APP_START    MEM_DFU_WRITABLE_BASE
 #define DFU_APP_END      MEM_DFU_WRITABLE_END
 #define ERASE_ALL_ADDR   0xFFFFFFFFU

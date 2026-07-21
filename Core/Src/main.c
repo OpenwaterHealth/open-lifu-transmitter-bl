@@ -446,6 +446,20 @@ int main(void)
       }
     }
 
+    /* Host-requested reset (DNLOAD to the virtual reset address): the clean
+     * way for a host tool to leave DFU without flashing — e.g. the SDK
+     * aborting an update after its pre-flight downgrade check. SBSFU fully
+     * re-verifies the slot on the way back up, so if the slot is intact the
+     * application boots; if not, we simply return to DFU. */
+    if (DFU_ResetRequested() != 0U)
+    {
+#ifdef DEBUG_ENABLED
+      printf("[BL] host requested reset - leaving USB DFU mode\r\n");
+#endif
+      delay_ms(50U);
+      NVIC_SystemReset();
+    }
+
     if (++usb_blink >= 100U)   /* heartbeat LED (tick-free) */
     {
       HAL_GPIO_TogglePin(LD_HB_GPIO_Port, LD_HB_Pin);

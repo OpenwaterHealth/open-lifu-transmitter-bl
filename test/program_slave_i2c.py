@@ -5,8 +5,9 @@ openlifu-sdk, against the SECURE bootloader.
 Why this exists instead of `LIFUDFUManager.program_i2c`:
   * program_i2c consumes a legacy PGK1 package and, as part of the flow,
     ERASES and WRITES the metadata page 0x0800F800. Under the secure
-    bootloader that page is READ-ONLY (it now holds the anti-rollback floor at
-    0x0803F000 and the app-owned user-config page at 0x0803F800), so those
+    bootloader that address is READ-ONLY (inside the bootloader region; the
+    anti-rollback floor log lives at 0x0803F000 and the app-owned user-config
+    page at 0x0803F800, both outside the DFU writable window), so those
     steps fail with BAD_ADDR.
   * The secure signing (the openlifu-sdk signer, openlifu_sdk.io.LIFUCrypto)
     produces a RAW image: [320B SFU1 header][0xFF pad][clear firmware],

@@ -241,7 +241,8 @@ python -m openlifu_sdk.io.LIFUCrypto sign --keys py-tools/keys \
 
 **Anti-rollback (downgrade protection).** The bootloader keeps a persistent,
 monotonic **version floor** — the highest `FwVersion` it has ever launched —
-stored in a flash page (0x0800F800) that the DFU update path cannot erase. After verifying
+stored in flash page 126 (`0x0803F000`), which sits outside the DFU writable
+window so the update path cannot erase it. After verifying
 an image's signature, it compares the (now-trusted) `FwVersion` to the floor:
 
 - `FwVersion ≥ floor` → launch the app, and raise the floor to this version.

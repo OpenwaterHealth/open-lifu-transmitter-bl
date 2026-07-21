@@ -109,6 +109,7 @@ uint8_t DFU_ImageDownloadComplete(void);
 uint8_t DFU_IsRollback(void);
 void    DFU_InvalidateImage(void);
 void    DFU_ClearDownloadState(void);
+uint8_t DFU_ResetRequested(void);
 
 /* USER CODE END EXPORTED_FUNCTIONS */
 
