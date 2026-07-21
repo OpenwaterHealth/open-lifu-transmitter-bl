@@ -1,0 +1,86 @@
+{
+  "version": "1",
+  "pip_version": "26.1.2",
+  "install": [
+    {
+      "download_info": {
+        "url": "file:///C:/Users/gvigelet/CURRENT_WORK/openwater/lifu/openlifu-sdk",
+        "dir_info": {}
+      },
+      "is_direct": true,
+      "is_yanked": false,
+      "requested": true,
+      "metadata": {
+        "metadata_version": "2.4",
+        "name": "openlifu-sdk",
+        "version": "2.0.14.post1.dev8",
+        "dynamic": [
+          "license-file"
+        ],
+        "summary": "Openwater LIFU SDK — hardware I/O interface library",
+        "description": "# openlifu-sdk\n\nOpenwater LIFU SDK — standalone hardware I/O interface library.\n\nThis package provides the low-level communication layer for Openwater LIFU devices,\nincluding the TX module and HV controller.\n\n## Installation\n\n```bash\npip install openlifu-sdk\n```\n\nOr for development:\n\n```bash\npip install -e \".[dev]\"\n```\n\n## Building a wheel\n\n```bash\npip install build\npython -m build\n```\n\n## Usage\n\n```python\nfrom openlifu_sdk import LIFUInterface\n\ninterface = LIFUInterface()\ntx_connected, hv_connected = interface.is_device_connected()\n```\n\n## Examples\n\nSee the `examples/` directory for usage scripts.\n\nDocumentation\n-------------\n\nDetailed SDK documentation is available in the `docs/` folder. Start with [docs/README.md](docs/README.md) for installation, usage examples, and an API reference.\n",
+        "description_content_type": "text/markdown",
+        "author_email": "George Vigelette <george@openwater.health>",
+        "license_expression": "MIT",
+        "license_file": [
+          "LICENSE"
+        ],
+        "classifier": [
+          "Development Status :: 4 - Beta",
+          "Intended Audience :: Science/Research",
+          "Intended Audience :: Developers",
+          "Operating System :: OS Independent",
+          "Programming Language :: Python",
+          "Programming Language :: Python :: 3",
+          "Programming Language :: Python :: 3.10",
+          "Programming Language :: Python :: 3.12",
+          "Topic :: Scientific/Engineering",
+          "Typing :: Typed"
+        ],
+        "requires_dist": [
+          "numpy",
+          "pandas",
+          "xarray",
+          "pyserial",
+          "pyusb",
+          "base58",
+          "pytest>=6; extra == \"test\"",
+          "pytest-cov>=3; extra == \"test\"",
+          "pytest-mock; extra == \"test\"",
+          "pytest>=6; extra == \"dev\"",
+          "pytest-cov>=3; extra == \"dev\"",
+          "pytest-mock; extra == \"dev\"",
+          "PyQt6>=6.5; extra == \"ui\"",
+          "packaging>=21.0; extra == \"ui\"",
+          "requests>=2.25.0; extra == \"ui\""
+        ],
+        "requires_python": ">=3.10",
+        "project_url": [
+          "Homepage, https://github.com/OpenwaterHealth/openlifu-sdk",
+          "Bug Tracker, https://github.com/OpenwaterHealth/openlifu-sdk/issues"
+        ],
+        "provides_extra": [
+          "test",
+          "dev",
+          "ui"
+        ]
+      },
+      "requested_extras": [
+        "ui"
+      ]
+    }
+  ],
+  "environment": {
+    "implementation_name": "cpython",
+    "implementation_version": "3.14.0",
+    "os_name": "nt",
+    "platform_machine": "AMD64",
+    "platform_release": "11",
+    "platform_system": "Windows",
+    "platform_version": "10.0.26200",
+    "python_full_version": "3.14.0",
+    "platform_python_implementation": "CPython",
+    "python_version": "3.14",
+    "sys_platform": "win32"
+  }
+}

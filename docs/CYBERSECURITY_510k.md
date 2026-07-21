@@ -260,7 +260,7 @@ the next reset before it can execute.
   application repeatedly fails to reach a healthy state, preventing a boot loop from stranding the device.
 
 ### 5.4 Secure firmware update (detailed)
-- Update images are produced by the controlled signing tool (`py-tools/sign_firmware.py`): a 320-byte
+- Update images are produced by the controlled signing tool (the openlifu-sdk's `LIFUCrypto` signer): a 320-byte
   (0x140) SFU1 header (magic, version, sizes, SHA-256 FW tag, IV, **ECDSA-P256 signature**, image
   state, previous-header fingerprint) followed by the clear firmware body at the slot execution offset
   (0x400).
@@ -283,7 +283,10 @@ To prevent an attacker from installing an older, **validly-signed but known-vuln
 version (threat T-9), the bootloader enforces a monotonic version floor:
 
 - **Version source.** Each signed image carries a 16-bit `FwVersion` in its ECDSA-signed header,
-  supplied by the controlled build/CI pipeline at signing time and monotonic with release ordering.
+  supplied by the controlled build/CI pipeline at signing time. The release semver is packed as a
+  bitfield `major[15:11].minor[10:5].patch[4:0]` (major 0–31, minor 0–63, patch 0–31), which is
+  strictly monotonic with release ordering — the bootloader's integer compare needs no knowledge of
+  the scheme.
 - **Persistent floor.** The bootloader stores accepted versions in a dedicated flash **page (page 126,
   `0x0803F000`)** as an append-only log of 8-byte doubleword entries (`version | ~version`). This page
   is **outside the DFU writable window**, so a firmware update cannot erase or lower it; it is

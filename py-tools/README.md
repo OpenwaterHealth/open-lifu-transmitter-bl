@@ -154,22 +154,34 @@ arm-none-eabi-objdump -h build/Debug/your_app.elf | grep isr_vector
 
 ## 6. Sign the application
 
+Signing lives in the **openlifu-sdk** (`openlifu_sdk.io.LIFUCrypto`) — the
+single source of truth for the image format and the `FwVersion` encoding. The
+local `py-tools/sign_firmware.py` is retired (it only prints a pointer to the
+SDK).
+
 ```sh
-python py-tools/sign_firmware.py \
-    --firmware    path/to/your_app.bin \
-    --private-key py-tools/keys/ecdsa_private.pem \
-    --aes-key     py-tools/keys/aes128.bin \
-    --version     1 \
-    --output      your_app_signed.bin
+pip install 'openlifu-sdk[crypto]'
+python -m openlifu_sdk.io.LIFUCrypto sign \
+    --keys     py-tools/keys \
+    --firmware path/to/your_app.bin \
+    --version  0.0.1 \
+    --output   your_app_signed.bin
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--firmware` | *(required)* | Raw `.bin` built for `0x08010400` (step 5) |
-| `--private-key` | `py-tools/keys/ecdsa_private.pem` | ECDSA P-256 private key |
-| `--aes-key` | `py-tools/keys/aes128.bin` | Raw 16-byte AES-128 key |
-| `--version` | `1` | 16-bit firmware version (1–65535) for anti-rollback — see [Firmware versioning & anti-rollback](#firmware-versioning--anti-rollback) |
-| `--output` | `<firmware>_signed.bin` | Output path |
+| Option | Description |
+|--------|-------------|
+| `--keys` | Directory holding `ecdsa_private.pem` + `aes128.bin` |
+| `--firmware` | Raw `.bin` built for `0x08010400` (step 5) |
+| `--version` | Semver `major.minor.patch` (bitfield-encoded) or raw 16-bit integer — see [Firmware versioning & anti-rollback](#firmware-versioning--anti-rollback) |
+| `--version-header` | Alternative to `--version`: read `FW_VERSION` from the build's generated `version.h` |
+| `--output` | Signed image output path |
+
+Inspect / validate a signed image:
+
+```sh
+python -m openlifu_sdk.io.LIFUCrypto info   your_app_signed.bin
+python -m openlifu_sdk.io.LIFUCrypto verify your_app_signed.bin --keys py-tools/keys
+```
 
 ### Signed-image layout (what gets flashed to the slot)
 
@@ -183,42 +195,49 @@ Offset 0x400 [FwSize] Firmware body  (CLEAR — see note)
 > **Note (single-slot / NO_LOADER):** the active slot stores the firmware **in
 > clear**. The bootloader's boot-time check is SHA-256 only (it does not decrypt);
 > AES-CBC decryption belongs to the OTA install path, which is not used here. The
-> header is still ECDSA-signed, so the image is authenticated. `sign_firmware.py`
+> header is still ECDSA-signed, so the image is authenticated. The SDK signer
 > emits the clear body at offset `0x400` automatically.
 
 ### Firmware versioning & anti-rollback
 
 The signed header carries a **16-bit `FwVersion`** (offset `0x006`, inside the
-ECDSA-signed region). `--version` sets it as a raw integer (1–65535); because it
-is signed, it cannot be altered without re-signing.
+ECDSA-signed region); because it is signed, it cannot be altered without
+re-signing.
 
-**Encoding convention — `MMmmpp`.** Encode the release semantic version as a
-single integer:
+**Encoding convention — 16-bit bitfield.** The release semantic version is
+packed as `major[15:11] . minor[10:5] . patch[4:0]`:
 
 ```
-FwVersion = major*10000 + minor*100 + patch
+FwVersion = (major << 11) | (minor << 5) | patch
 ```
 
-| Semver | `--version` |
+| Semver | `FwVersion` |
 |--------|-------------|
-| 1.0.0  | `10000` |
-| 1.8.0  | `10800` |
-| 1.9.3  | `10903` |
-| 2.0.0  | `20000` |
+| 0.0.1    | `1` |
+| 1.0.0    | `2048` |
+| 1.2.6    | `2118` |
+| 2.0.0    | `4096` |
+| 31.63.31 | `65535` (max) |
 
-This keeps the integer **monotonic** with semver ordering. Limits: `minor` and
-`patch` are each `0–99`, and `major ≤ 6` (the packed value must fit 16 bits,
-`≤ 65535`). Pre-release suffixes are **not** encoded — `1.8.0-rc.1`, `1.8.0-dev.2`
-and `1.8.0` all map to `10800`.
+Ranges: **major 0–31, minor 0–63, patch 0–31** (max `31.63.31` = `0xFFFF`;
+`0.0.0` is invalid). The packing is **strictly monotonic** with semver ordering,
+so the bootloader's anti-rollback integer compare needs no knowledge of the
+scheme. Pre-release / git-describe suffixes are **not** encoded — `1.8.0-rc.1`,
+`1.8.0-dev.2` and `1.8.0` all encode identically.
 
-The release/CI build derives it from the git tag, e.g.:
+The encoding is owned by the SDK signer — pass the semver string and it packs
+it for you:
 
 ```sh
-VER="${TAG%%-*}"                          # 1.8.0-rc.1 -> 1.8.0
-IFS=. read -r MAJ MIN PAT <<< "$VER"
-FWVER=$(( MAJ*10000 + MIN*100 + PAT ))     # -> 10800
-python py-tools/sign_firmware.py --firmware app.bin --version "$FWVER" --output app_signed.bin
+python -m openlifu_sdk.io.LIFUCrypto sign --keys py-tools/keys \
+    --firmware app.bin --version 1.8.0 --output app_signed.bin   # FwVersion 2304
 ```
+
+> **Migration note.** This replaces the earlier decimal `MMmmpp` convention
+> (`major*10000 + minor*100 + patch`, major ≤ 6). Old encodings are numerically
+> much larger (1.2.6 was `10206`, is now `2118`), so a unit that latched an
+> anti-rollback floor under the old scheme rejects new-scheme images until the
+> floor is reset (full-chip erase via debugger).
 
 **Anti-rollback (downgrade protection).** The bootloader keeps a persistent,
 monotonic **version floor** — the highest `FwVersion` it has ever launched —
@@ -353,7 +372,7 @@ Addr range              Size   Pages   Region                   DFU access
 py-tools/
   generate_keys.py     Generate ECC P-256 + AES-128 keys, update se_key.s
   gen_se_key_s.py      Low-level: raw key bytes -> ARM MOVW/MOVT asm
-  sign_firmware.py     Sign + format an application image for the active slot
+  sign_firmware.py     RETIRED stub — signing moved to openlifu-sdk (LIFUCrypto)
   flash_firmware.py    Pure-Python USB DFU installer (uses stm32dfu.py)
   stm32dfu.py          Pure-Python STM32 DfuSe protocol (pyusb)
   requirements.txt     cryptography, pyusb
@@ -379,6 +398,6 @@ openocd -f interface/stlink.cfg -f target/stm32h7x.cfg \
 
 # per application build
 #   (1) link app at 0x08010400 + VTOR 0x08010400, then build your_app.bin
-python py-tools/sign_firmware.py --firmware your_app.bin --version 1 --output your_app_signed.bin
+python -m openlifu_sdk.io.LIFUCrypto sign --keys py-tools/keys --firmware your_app.bin --version 0.0.1 --output your_app_signed.bin
 python py-tools/flash_firmware.py your_app_signed.bin        # or: dfu-util -D your_app_signed.bin -a 0 -s 0x08010000:leave
 ```

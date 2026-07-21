@@ -8,7 +8,7 @@ Why this exists instead of `LIFUDFUManager.program_i2c`:
     bootloader that page is READ-ONLY (it now holds the anti-rollback floor at
     0x0803F000 and the app-owned user-config page at 0x0803F800), so those
     steps fail with BAD_ADDR.
-  * The secure signing (open-lifu-transmitter-bl/py-tools/sign_firmware.py)
+  * The secure signing (the openlifu-sdk signer, openlifu_sdk.io.LIFUCrypto)
     produces a RAW image: [320B SFU1 header][0xFF pad][clear firmware],
     written whole to the slot base 0x08010000 — there is no separate metadata
     page.
@@ -46,7 +46,8 @@ def _progress(written: int, total: int, label: str = "write") -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("signed", help="raw signed image from sign_firmware.py")
+    ap.add_argument("signed", help="raw signed image from the SDK signer "
+                                   "(openlifu_sdk.io.LIFUCrypto)")
     ap.add_argument("--module", type=int, default=1,
                     help="slave module index as seen by the master (default 1)")
     ap.add_argument("--i2c-addr", type=lambda x: int(x, 0), default=None,
@@ -68,7 +69,7 @@ def main() -> None:
     raw = open(args.signed, "rb").read()
     if raw[0:4] != b"SFU1":
         print(f"WARNING: {args.signed} does not start with 'SFU1' — is this a "
-              f"sign_firmware.py image?", file=sys.stderr)
+              f"signed SFU1 image?", file=sys.stderr)
     print(f"signed image : {len(raw)} bytes -> slave slot 0x{SLOT_BASE:08X}")
     print(f"slave module  : {args.module}")
 

@@ -15,10 +15,11 @@ Differences under secure boot (SBSFU):
   floor log lives at 0x0803F000.
 - The legacy signing subcommands (`sign-metadata`, `program-signed`,
   `pack-signed`, `verify-*`, `program-package`) target the old WFM1/PGK1
-  scheme and do not apply. Sign with `py-tools/sign_firmware.py` and write
-  the signed image to 0x08010000 with `write`, then `reboot`:
+  scheme and do not apply. Sign with the SDK signer
+  (`openlifu_sdk.io.LIFUCrypto`) and write the signed image to 0x08010000
+  with `write`, then `reboot`:
 
-      python py-tools/sign_firmware.py --firmware app.bin --version N --output signed.bin
+      python -m openlifu_sdk.io.LIFUCrypto sign --keys py-tools/keys --firmware app.bin --version X.Y.Z --output signed.bin
       python test/dfu-i2c-test.py write --file signed.bin --address 0x08010000 --erase-pages
       python test/dfu-i2c-test.py reboot
 

@@ -398,7 +398,8 @@ class STM32DFU:
         Args:
             address:     Target flash address. For the secure bootloader this is
                          the SBSFU active-slot start, 0x08010000 (APP_FLASH_START),
-                         and `data` must be a SIGNED image (sign_firmware.py).
+                         and `data` must be a SIGNED image (produced by the
+                         SDK signer, openlifu_sdk.io.LIFUCrypto).
             data:        Bytes-like firmware image (signed .bin for secure boot).
             progress_cb: Optional callable(done: int, total: int, msg: str="").
                          Called after each erased sector and each written block.

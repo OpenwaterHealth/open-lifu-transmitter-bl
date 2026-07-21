@@ -108,9 +108,11 @@ Application firmware lives in the separate `openlifu-transmitter-fw` repo. Build
 install a version at or above the anti-rollback floor:
 
 ```bash
-# 1) Sign (FwVersion must be >= the device's persistent floor)
-export LIFU_BL_KEYS=../bl-keys/transmitter
-python py-tools/sign_firmware.py --firmware app.bin --version 3 --output app-signed.bin
+# 1) Sign (FwVersion must be >= the device's persistent floor). The signer is
+#    the SDK's LIFUCrypto; --version takes a semver, packed as the 16-bit
+#    bitfield major[15:11].minor[10:5].patch[4:0] (monotonic with semver).
+python -m openlifu_sdk.io.LIFUCrypto sign --keys ../bl-keys/transmitter \
+    --firmware app.bin --version 0.0.3 --output app-signed.bin
 
 # 2a) Install over USB DFU (host-connected board)
 dfu-util -D app-signed.bin -a 0 -s 0x08010000:leave

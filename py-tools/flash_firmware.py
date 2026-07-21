@@ -2,14 +2,15 @@
 """
 flash_firmware.py — Pure-Python installer for the openmotion-bl SECURE bootloader.
 
-Flashes a SIGNED firmware image (produced by sign_firmware.py) into the SBSFU
+Flashes a SIGNED firmware image (produced by the openlifu-sdk signer,
+openlifu_sdk.io.LIFUCrypto) into the SBSFU
 active slot at 0x08010000 over USB DFU, then resets the device so the bootloader
 verifies the signature and launches the application. This is the pure-Python
 equivalent of:
     dfu-util -D app_signed.bin -a 0 -s 0x08010000:leave
 
 The input MUST be a signed image (header + clear firmware at offset 0x400), not a
-raw application .bin. See sign_firmware.py / README.md.
+raw application .bin. See README.md (section 6, "Sign the application").
 
 Usage:
     python flash_firmware.py app_signed.bin           # install signed image to slot
@@ -76,7 +77,8 @@ def cmd_flash(args):
         print("Error: no firmware image given.\n"
               "       Provide a SIGNED image, e.g.:\n"
               "         python flash_firmware.py app_signed.bin\n"
-              "       Create one with sign_firmware.py first.")
+              "       Create one with the SDK signer first:\n"
+              "         python -m openlifu_sdk.io.LIFUCrypto sign ...")
         sys.exit(1)
 
     if not os.path.isfile(bin_path):
@@ -90,7 +92,8 @@ def cmd_flash(args):
     if firmware[:4] != b"SFU1":
         print("Warning: image does not start with the 'SFU1' magic — this does not look\n"
               "         like a signed image. The bootloader will reject a raw .bin.\n"
-              "         Sign it first with sign_firmware.py.")
+              "         Sign it first with the SDK signer "
+              "(python -m openlifu_sdk.io.LIFUCrypto sign).")
 
     size_kb = len(firmware) / 1024
     print(f"Firmware : {bin_path}")
@@ -188,7 +191,8 @@ def main():
     p_flash = sub.add_parser("flash", help="Install a signed firmware image (default command)")
     p_flash.add_argument(
         "binary", nargs="?", default=None,
-        help="Path to the SIGNED .bin (from sign_firmware.py)")
+        help="Path to the SIGNED .bin (from the SDK signer, "
+             "openlifu_sdk.io.LIFUCrypto)")
     p_flash.add_argument(
         "--addr", type=lambda x: int(x, 0), default=DEFAULT_ADDR,
         help=f"Slot address (default: {DEFAULT_ADDR:#010x})")
