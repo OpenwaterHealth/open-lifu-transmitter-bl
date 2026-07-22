@@ -410,7 +410,11 @@ uint16_t MEM_If_GetStatus_FS(uint32_t Add, uint8_t Cmd, uint8_t *buffer)
   switch (Cmd)
   {
     case DFU_MEDIA_PROGRAM:
-      timeout_ms = 5U;     /* per write block */
+      /* A full 1 KB block is 128 doubleword programs at ~90 us each with
+       * instruction fetch stalled — ~12 ms. Advertising less makes hosts
+       * poll GETSTATUS mid-program, which has been observed to race the
+       * middleware into a spurious STALL. */
+      timeout_ms = 15U;    /* per 1 KB write block */
       break;
 
     case DFU_MEDIA_ERASE:
@@ -461,10 +465,22 @@ uint8_t DFU_ImageDownloadComplete(void)
    * to COMPLETE. The host's terminal dev_state varies: dfu-util in DfuSe mode
    * reads status once (seeing dfuMANIFEST) and stops, leaving us in
    * MANIFEST_SYNC; a host that polls through to the end leaves us in dfuIDLE.
-   * Accept either. The s_dfu_image_written gate keeps this from matching the
-   * power-on default (IDLE + COMPLETE), and the write phase never sits in
-   * MANIFEST_SYNC/IDLE (it cycles through the DNLOAD_* states), so neither can
-   * trigger a premature reboot. */
+   * Accept either.
+   *
+   * CRITICAL extra gate — wlength == 0: the middleware leaves manif_state at
+   * its power-on value (COMPLETE) for the entire data phase; it only cycles
+   * IN_PROGRESS -> COMPLETE through an actual leave. So (image written +
+   * dfuIDLE + COMPLETE) alone is NOT proof of manifestation: a host that
+   * sends DFU_ABORT between data blocks (or after the last one) matches it
+   * and gets rebooted MID-DOWNLOAD. hdfu->wlength holds the length of the
+   * most recent DNLOAD: > 0 for every data/command block, and 0 only for the
+   * zero-length "leave DFU" download. Requiring wlength == 0 means a reboot
+   * can only follow a genuine leave request. */
+  if (hdfu->wlength != 0U)
+  {
+    return 0U;
+  }
+
   if (hdfu->manif_state != DFU_MANIFEST_COMPLETE)
   {
     return 0U;

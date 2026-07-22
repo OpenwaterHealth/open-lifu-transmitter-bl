@@ -523,6 +523,26 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   HAL_RCC_MCOConfig(RCC_MCO1, RCC_MCO1SOURCE_MSI, RCC_MCODIV_2);
+
+  /* Lock HSI48 (the USB clock, CLK48SEL default) to the USB host's SOF via
+   * the clock recovery system. Free-running HSI48 drifts up to ~3-4 % over
+   * temperature/voltage, well outside the USB full-speed ±0.25 % tolerance;
+   * without CRS, sustained DFU transfers accumulate bus errors that surface
+   * host-side as intermittent pipe/IO failures mid-download (observed on the
+   * bench) and can force a port re-enumeration. The STM32 ROM bootloader
+   * enables CRS for exactly this reason (AN2606, L43xxx/44xxx: "CRS is
+   * enabled for the DFU to allow USB to be clocked by HSI48"). */
+  {
+    RCC_CRSInitTypeDef crs = {0};
+    __HAL_RCC_CRS_CLK_ENABLE();
+    crs.Prescaler             = RCC_CRS_SYNC_DIV1;
+    crs.Source                = RCC_CRS_SYNC_SOURCE_USB;
+    crs.Polarity              = RCC_CRS_SYNC_POLARITY_RISING;
+    crs.ReloadValue           = RCC_CRS_RELOADVALUE_DEFAULT;
+    crs.ErrorLimitValue       = RCC_CRS_ERRORLIMIT_DEFAULT;
+    crs.HSI48CalibrationValue = RCC_CRS_HSI48CALIBRATION_DEFAULT;
+    HAL_RCCEx_CRSConfig(&crs);
+  }
 }
 
 /**
