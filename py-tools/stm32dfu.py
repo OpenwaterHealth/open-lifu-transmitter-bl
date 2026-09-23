@@ -393,7 +393,8 @@ class STM32DFU:
 
     def download(self, address, data, progress_cb=None):
         """
-        Erase affected flash sectors and write `data` starting at `address`.
+        Erase flash from `address` through the end of the slot, then write
+        `data` starting at `address`.
 
         Args:
             address:     Target flash address. For the secure bootloader this is
@@ -418,9 +419,13 @@ class STM32DFU:
                 f"bootloader's writable region {self.APP_FLASH_START:#010x}.."
                 f"{self.APP_FLASH_END:#010x} (sector 0 holds the read-only bootloader).")
 
-        # ── erase affected sectors ──────────────────────────────────────────
+        # ── erase from the target sector through the end of the slot ────────
+        # Not just the image's own sectors: SBSFU's VerifySlot() requires
+        # everything past the image to be blank, so a smaller image written
+        # over a larger one would leave the old tail behind and the bootloader
+        # would invalidate the slot at boot.
         sector_start = (address // self.FLASH_SECTOR_SIZE) * self.FLASH_SECTOR_SIZE
-        end_address  = address + total
+        end_address  = self.APP_FLASH_END
         sectors = []
         s = sector_start
         while s < end_address:
