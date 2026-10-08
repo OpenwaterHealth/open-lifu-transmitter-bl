@@ -1,5 +1,9 @@
 # open-lifu-transmitter-bl
 
+## Disclaimer
+
+CAUTION - Investigational device. Limited by Federal (or United States) law to investigational use. The system described here has not been evaluated by the FDA and is not designed for the treatment or diagnosis of any disease. It is provided AS-IS, with no warranties. User assumes all liability and responsibility for identifying and mitigating risks associated with using this software.
+
 **Secure bootloader and secure firmware-update subsystem for the openLIFU transmitter (STM32L443).**
 
 This is the immutable **Root of Trust** for each LIFU transmitter board. On every reset it verifies the
