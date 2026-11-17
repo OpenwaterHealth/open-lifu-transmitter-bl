@@ -1,2 +1,5 @@
 cryptography>=41.0.0
 pyusb>=1.2.1
+# Clinical public-key check (export_public_key.py, CI on every build). Not needed
+# to build the bootloader or to flash.
+google-cloud-kms==3.18.0
