@@ -25,6 +25,12 @@ jobs:
 
       # 1. Cppcheck with MISRA-C:2012 and Safety focus
       # --error-exitcode=1 ensures the build fails on findings
+      # __ALIGN_BEGIN/__ALIGN_END are the ST USB library's alignment macros
+      # (empty for GCC); cppcheck >= 2.19 stops with unknownMacro without them.
+      # __HAL_RCC_RTCAPB_CLK_ENABLE does not exist on the STM32L443 (main.c only
+      # calls it under #if defined); -U stops cppcheck checking that configuration.
+      # constParameterCallback in usbd_dfu_if.c: the MEM_If_* signatures are fixed
+      # by the ST USB DFU class (USBD_DFU_MediaTypeDef), not ours to change.
       - name: Run Cppcheck (Safety & Standards)
         run: |
           cppcheck --enable=warning,style,performance,portability \
@@ -32,7 +38,9 @@ jobs:
                    --error-exitcode=1 \
                    --force \
                    --inline-suppr \
-                   --std=c11 \
+                   -D__ALIGN_BEGIN= \
+                   -D__ALIGN_END= \
+                   -U__HAL_RCC_RTCAPB_CLK_ENABLE \
                    --template="[{severity}] {file}:{line} {id} - {message}" \
                    --suppress=missingIncludeSystem \
                    --suppress=*:Core/Src/lwrb.c \
@@ -40,6 +48,7 @@ jobs:
                    --suppress=*:Core/Src/system_stm32l4xx.c \
                    --suppress=*:Core/Src/stm32l4xx_hal_msp.c \
                    --suppress=*:Core/Src/syscalls.c \
+                   --suppress=constParameterCallback:USB_DEVICE/App/usbd_dfu_if.c \
                    ./Core/Src ./USB_DEVICE/App
 
       # 2. Complexity Analysis (Lizard)
