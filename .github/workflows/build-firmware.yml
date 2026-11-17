@@ -1,15 +1,49 @@
 name: Build bootloader
 
+# Two variants from one tree (CMake LIFU_BL_VARIANT, see app_sfu.h):
+#   research : unlocked; trusts py-tools/keys/research/ecdsa_public.pem (the firmware
+#              repo's FW_SIGNING_KEY). Public: workflow artifact + GitHub release assets,
+#              names unchanged (open-lifu-transmitter-bl.{bin,hex}), consumed by
+#              openlifu-transmitter-fw's build-firmware.yml, diathermy firmware/pins.json
+#              and the openlifu-sdk wheel.
+#   clinical : WRP + PCROP (SE key region) + RDP level 1 applied on first boot, DAP and
+#              DMA protection at run time; trusts the Cloud KMS key
+#              (py-tools/keys/clinical/ecdsa_public.pem). Built on every run so it
+#              always compiles, but published ONLY to the private bucket, on tags:
+#              gs://openwater-firmware-artifacts/<repo>/<tag>/<repo>-<tag>-clinical.*
+#              Neither the binaries nor the clinical SBOM are ever a workflow artifact
+#              or a release asset (public repository).
+# Every run also checks the committed clinical PEM against the KMS key.
+
 on:
   workflow_dispatch: {}
   push:
     branches: [ "main", "next" ]
     tags:
+      # GitHub's tag filter '*' matches any character except '/', so "*.*.*" also
+      # matches "1.1.0-rc.0". "Detect release type" decides release vs pre-release.
       - "*.*.*"
-      - "*.*.*-rc.*"
 
+# id-token: write lets the job obtain a GitHub OIDC token, which Google Cloud
+# exchanges (Workload Identity Federation) for a short-lived identity. No Google
+# credential is stored in this repository. The uploader binding accepts only tag
+# refs of this repository, so branch builds cannot upload.
 permissions:
   contents: write
+  id-token: write
+
+env:
+  BUILD_IMAGE: ghcr.io/openwaterhealth/stm32-build-env:latest
+  GCS_BUCKET: openwater-firmware-artifacts
+  WIF_PROVIDER: projects/341318872140/locations/global/workloadIdentityPools/github/providers/github-oidc
+  # objectCreator on the bucket only (write-once: cannot read, delete or overwrite).
+  UPLOADER_SA: sa-bl-artifact-uploader@openwater-cloud.iam.gserviceaccount.com
+  # roles/cloudkms.publicKeyViewer on the key rings, nothing else.
+  PUBKEY_READER_SA: sa-bl-pubkey-reader@openwater-cloud.iam.gserviceaccount.com
+  KMS_KEY_VERSION: projects/openwater-cloud/locations/us-central1/keyRings/openlifu-firmware/cryptoKeys/lifu-transmitter-fw-signing/cryptoKeyVersions/1
+  RESEARCH_PEM: py-tools/keys/research/ecdsa_public.pem
+  CLINICAL_PEM: py-tools/keys/clinical/ecdsa_public.pem
+  BL: open-lifu-transmitter-bl
 
 jobs:
   build:
@@ -19,133 +53,194 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0        # full history so git-describe works
           fetch-tags: true
 
       # ---------------------------
-      # Determine build config from the ref:
+      # Research build config from the ref (the clinical variant is always the
+      # Clinical preset):
       #   *-dev.* tag            -> Debug   (development pre-release)
       #   *-rc.* / X.Y.Z tag     -> Release (release candidate / final release)
       #   branch push / dispatch -> Debug
+      # A Debug build turns USART2 into the trace console, which is the one-wire
+      # back-channel in Release: slave boards must run a Release build.
       # ---------------------------
       - name: Determine build config
         id: cfg
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
-            TAG_NAME=$(python3 -c "import json;print(json.load(open('$GITHUB_EVENT_PATH'))['release']['tag_name'])")
-            IS_TAG=1
-          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG_NAME="$GITHUB_REF_NAME"; IS_TAG=1
-          else
-            TAG_NAME="$GITHUB_REF_NAME"; IS_TAG=0
-          fi
-          if [ "$IS_TAG" = "1" ] && [[ "$TAG_NAME" != *-dev.* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]] && [[ "$GITHUB_REF_NAME" != *-dev.* ]]; then
             CONFIG=Release
           else
             CONFIG=Debug
           fi
           echo "config=$CONFIG" >> "$GITHUB_OUTPUT"
-          echo "ref='$GITHUB_REF' event='$GITHUB_EVENT_NAME' tag='$TAG_NAME' -> build config: $CONFIG"
+          echo "ref='$GITHUB_REF' event='$GITHUB_EVENT_NAME' -> research build config: $CONFIG"
 
-      # Regenerate the SECoreBin key file from key material kept OUT of git:
-      #   - AES-128 key  : from the SECOREBIN_AES_KEY secret (base64 of the 16 raw bytes)
-      #   - ECC pub key  : derived from the committed py-tools/keys/research/ecdsa_public.pem
-      # se_key.s embeds the AES secret, so it is .gitignored and produced here at
-      # build time. The ECDSA *private* signing key is NOT needed to build the BL.
-      - name: Regenerate se_key.s from key material
+      - name: Install Python tools
+        run: python3 -m pip install --quiet --disable-pip-version-check -r py-tools/requirements.txt
+
+      # SHA-256 of each trusted public key (DER SubjectPublicKeyInfo). Goes into the
+      # release notes and the SBOMs, so a unit's trusted key can be traced.
+      - name: Fingerprint trusted public keys
+        id: pubkey
+        run: |
+          fp() { openssl pkey -pubin -in "$1" -outform DER | openssl dgst -sha256 | awk '{print $2}'; }
+          echo "research=$(fp "$RESEARCH_PEM")" >> "$GITHUB_OUTPUT"
+          echo "clinical=$(fp "$CLINICAL_PEM")" >> "$GITHUB_OUTPUT"
+          echo "research trusts sha256:$(fp "$RESEARCH_PEM")"
+          echo "clinical trusts sha256:$(fp "$CLINICAL_PEM")"
+
+      # ---------------------------
+      # Integrity check of the committed clinical public key: fetch the public half
+      # of the clinical signing key from Cloud KMS and fail the build if it is not the
+      # PEM compiled into the clinical variant. Read-only federated identity.
+      # ---------------------------
+      - name: Authenticate to Google Cloud (public-key reader)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.PUBKEY_READER_SA }}
+
+      - name: Verify committed clinical public key against Cloud KMS
+        run: python3 py-tools/export_public_key.py --kms-key "$KMS_KEY_VERSION" --output "$CLINICAL_PEM" --check
+
+      # ---------------------------
+      # Build both variants. se_key.s embeds the product AES-128 secret and the
+      # variant's ECC public key, so it is .gitignored and regenerated here, before
+      # each variant's build, from:
+      #   - AES-128 key : the SECOREBIN_AES_KEY secret (base64 of the 16 raw bytes)
+      #   - ECC pub key : the variant's committed PEM
+      # The ECDSA *private* keys are never needed to build a bootloader.
+      # ---------------------------
+      - name: Pull build image
+        run: docker pull -q "$BUILD_IMAGE"
+
+      - name: Build research and clinical variants
         env:
           SECOREBIN_AES_KEY: ${{ secrets.SECOREBIN_AES_KEY }}
+          RESEARCH_CONFIG: ${{ steps.cfg.outputs.config }}
         run: |
+          set -euo pipefail
           if [ -z "$SECOREBIN_AES_KEY" ]; then
             echo "::error::SECOREBIN_AES_KEY secret is not set — cannot build SECoreBin." >&2
             exit 1
           fi
-          python3 -m pip install --quiet --disable-pip-version-check cryptography
-          # AES key (secret) -> raw 16 bytes
+          trap 'rm -f "$RUNNER_TEMP/aes128.bin"' EXIT
           printf '%s' "$SECOREBIN_AES_KEY" | base64 -d > "$RUNNER_TEMP/aes128.bin"
           if [ "$(wc -c < "$RUNNER_TEMP/aes128.bin")" -ne 16 ]; then
             echo "::error::Decoded AES key is not 16 bytes — check the SECOREBIN_AES_KEY secret." >&2
             exit 1
           fi
-          # Public key X/Y (32 bytes each) from the committed public PEM
-          python3 - "$RUNNER_TEMP" <<'PY'
+          build_variant() {   # <pem> <cmake preset>
+            python3 - "$RUNNER_TEMP" "$1" <<'PY'
           import sys
           from cryptography.hazmat.primitives import serialization
-          tmp = sys.argv[1]
-          pub = serialization.load_pem_public_key(open("py-tools/keys/research/ecdsa_public.pem", "rb").read())
-          n = pub.public_numbers()
+          tmp, pem = sys.argv[1], sys.argv[2]
+          n = serialization.load_pem_public_key(open(pem, "rb").read()).public_numbers()
           open(f"{tmp}/pub_x.bin", "wb").write(n.x.to_bytes(32, "big"))
           open(f"{tmp}/pub_y.bin", "wb").write(n.y.to_bytes(32, "big"))
           PY
-          python3 py-tools/gen_se_key_s.py \
-            --aes-key   "$RUNNER_TEMP/aes128.bin" \
-            --pub-key-x "$RUNNER_TEMP/pub_x.bin" \
-            --pub-key-y "$RUNNER_TEMP/pub_y.bin"
-          rm -f "$RUNNER_TEMP/aes128.bin"
-          test -s SECoreBin/Startup/se_key.s && echo "se_key.s regenerated."
-
-      - name: Pull build image
-        run: docker pull ghcr.io/openwaterhealth/stm32-build-env:latest
-
-      - name: Build inside container
-        run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE":/workspace \
-            -w /workspace \
-            ghcr.io/openwaterhealth/stm32-build-env:latest \
-            bash -lc "git config --global --add safe.directory /workspace && cmake --preset ${{ steps.cfg.outputs.config }} && cmake --build build/${{ steps.cfg.outputs.config }} --config ${{ steps.cfg.outputs.config }} --target all -j 10"
-
-      # Guard: the objcopy POST_BUILD step must have produced both the .bin and
-      # .hex (not just the .elf). Fail loudly here rather than shipping an
-      # incomplete artifact that silently lacks the flashable images.
-      - name: Verify build outputs (.bin/.hex/.elf)
-        run: |
-          OUT="build/${{ steps.cfg.outputs.config }}"
-          echo "Contents of $OUT:"; ls -la "$OUT" || true
-          missing=0
-          for f in open-lifu-transmitter-bl.bin open-lifu-transmitter-bl.hex open-lifu-transmitter-bl.elf; do
-            if [ ! -s "$OUT/$f" ]; then
-              echo "::error::Expected build output missing or empty: $OUT/$f" >&2
-              missing=1
-            else
-              echo "OK: $OUT/$f ($(wc -c < "$OUT/$f") bytes)"
-            fi
-          done
-          [ "$missing" -eq 0 ]
+            python3 py-tools/gen_se_key_s.py \
+              --aes-key "$RUNNER_TEMP/aes128.bin" \
+              --pub-key-x "$RUNNER_TEMP/pub_x.bin" --pub-key-y "$RUNNER_TEMP/pub_y.bin"
+            test -s SECoreBin/Startup/se_key.s
+            docker run --rm -v "$GITHUB_WORKSPACE":/workspace -w /workspace "$BUILD_IMAGE" \
+              bash -lc "git config --global --add safe.directory /workspace && cmake --preset $2 && cmake --build build/$2 --config $2 --target all -j 10"
+            for ext in bin hex elf; do
+              test -s "build/$2/$BL.$ext" || { echo "::error::missing build/$2/$BL.$ext" >&2; exit 1; }
+            done
+            echo "Built $2 (se_key.s from $1)"
+          }
+          build_variant "$RESEARCH_PEM" "$RESEARCH_CONFIG"
+          build_variant "$CLINICAL_PEM" Clinical
+          rm -f SECoreBin/Startup/se_key.s
 
       # ---------------------------
-      # SBOM (CycloneDX 1.6): scripts/gen_sbom.py with the build image's toolchain and
-      # newlib versions and the reviewed, hash-pinned scripts/sbom-manifest.json.
-      # Written to _sbom/ (the container wrote build/ as root, so the runner cannot
-      # write there). Uploaded with the firmware and attached to tagged releases.
+      # Collect outputs and SBOMs (CycloneDX 1.6, scripts/gen_sbom.py: toolchain and
+      # newlib from the build image, reviewed hash-pinned scripts/sbom-manifest.json).
+      # The container wrote build/ as root, so outputs go to directories the runner owns.
+      #   _research/ : open-lifu-transmitter-bl.{bin,hex,elf} + .cdx.json (public)
+      #   _clinical/ : <repo>-<ref>-clinical.{bin,hex,elf,cdx.json} + SHA256SUMS (bucket only)
       # ---------------------------
-      - name: Generate SBOM
+      - name: Collect outputs and SBOMs
+        id: out
+        env:
+          RESEARCH_CONFIG: ${{ steps.cfg.outputs.config }}
         run: |
           set -euo pipefail
-          IMG=ghcr.io/openwaterhealth/stm32-build-env:latest
-          IMG_REF="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMG")"
-          TOOLCHAIN="$(docker run --rm "$IMG" arm-none-eabi-gcc --version | head -1)"
-          NEWLIB="$(docker run --rm "$IMG" sh -c 'echo "#include <newlib.h>" | arm-none-eabi-gcc -E -dM -' \
+          REPO="${GITHUB_REPOSITORY#*/}"
+          NAME="${REPO}-$(echo "$GITHUB_REF_NAME" | tr '/' '-')-clinical"
+          echo "clinical_name=$NAME" >> "$GITHUB_OUTPUT"
+          IMG_REF="$(docker inspect --format '{{index .RepoDigests 0}}' "$BUILD_IMAGE")"
+          TOOLCHAIN="$(docker run --rm "$BUILD_IMAGE" arm-none-eabi-gcc --version | head -1)"
+          NEWLIB="$(docker run --rm "$BUILD_IMAGE" sh -c 'echo "#include <newlib.h>" | arm-none-eabi-gcc -E -dM -' \
                     | sed -n 's/^#define _NEWLIB_VERSION "\(.*\)"/\1/p')"
           test -n "$NEWLIB"
-          mkdir -p _sbom
-          python3 scripts/gen_sbom.py --root . --manifest scripts/sbom-manifest.json \
-            --name "${GITHUB_REPOSITORY#*/}" --config "${{ steps.cfg.outputs.config }}" \
-            --toolchain "$TOOLCHAIN" --newlib-version "$NEWLIB" --build-image "$IMG_REF" \
-            --trusted-key research=py-tools/keys/research/ecdsa_public.pem \
-            --trusted-key clinical=py-tools/keys/clinical/ecdsa_public.pem \
-            -o _sbom/open-lifu-transmitter-bl.cdx.json
+          sbom() {   # <variant> <config> <pem> <output>
+            python3 scripts/gen_sbom.py --root . --manifest scripts/sbom-manifest.json \
+              --name "$REPO" --config "$2" \
+              --toolchain "$TOOLCHAIN" --newlib-version "$NEWLIB" --build-image "$IMG_REF" \
+              --trusted-key "$1=$3" --property "openwater:bl-variant=$1" \
+              -o "$4"
+          }
+          mkdir -p _research _clinical
+          for ext in bin hex elf; do
+            cp "build/$RESEARCH_CONFIG/$BL.$ext" _research/
+          done
+          sbom research "$RESEARCH_CONFIG" "$RESEARCH_PEM" "_research/$BL.cdx.json"
+          for ext in bin hex elf; do
+            cp "build/Clinical/$BL.$ext" "_clinical/$NAME.$ext"
+          done
+          sbom clinical Clinical "$CLINICAL_PEM" "_clinical/$NAME.cdx.json"
+          cd _clinical
+          sha256sum "$NAME.bin" "$NAME.hex" "$NAME.elf" "$NAME.cdx.json" > SHA256SUMS
+          cat SHA256SUMS
+          echo "clinical_bin_sha256=$(awk -v f="$NAME.bin" '{sub(/^\*/, "", $2)} $2==f{print $1}' SHA256SUMS)" >> "$GITHUB_OUTPUT"
 
-      - name: Upload firmware artifact
+      # Research variant only: this is a public repository, so a workflow artifact is
+      # downloadable by anyone with a GitHub account. The clinical variant never is.
+      - name: Upload research firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: open-lifu-transmitter-bl-${{ steps.cfg.outputs.config }}
-          path: |
-            build/${{ steps.cfg.outputs.config }}/*.hex
-            build/${{ steps.cfg.outputs.config }}/*.bin
-            build/${{ steps.cfg.outputs.config }}/*.elf
-            _sbom/open-lifu-transmitter-bl.cdx.json
+          path: _research/*
 
+      # ---------------------------
+      # Tag builds: clinical binaries to the private artifact bucket.
+      # Identity: GitHub OIDC -> Workload Identity Federation -> sa-bl-artifact-uploader
+      # (objectCreator only; bucket retention prevents replacement by anyone).
+      # ---------------------------
+      - name: Authenticate to Google Cloud (uploader)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.UPLOADER_SA }}
+
+      - name: Set up gcloud
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Upload clinical binaries to the private artifact bucket
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          DEST="gs://${GCS_BUCKET}/${GITHUB_REPOSITORY#*/}/${GITHUB_REF_NAME}/"
+          N="${{ steps.out.outputs.clinical_name }}"
+          cd _clinical
+          # The uploader holds objectCreator only (write-once, no read). A folder-style
+          # destination makes gcloud GET the prefix first, which is denied; copy each file
+          # to its exact object name instead.
+          for f in "$N.bin" "$N.hex" "$N.elf" "$N.cdx.json" SHA256SUMS; do
+            gcloud storage cp "$f" "${DEST}${f}"
+          done
+          echo "Uploaded to $DEST"
+
+      # ---------------------------
+      # Create GitHub Release (tags only): research binaries + research SBOM only.
+      # Nothing of the clinical variant is a release asset; its binaries and SBOM are
+      # in the private bucket (the notes give the path and the .bin SHA-256).
+      # ---------------------------
       - name: Detect release type
         id: reltype
         if: startsWith(github.ref, 'refs/tags/')
@@ -163,9 +258,12 @@ jobs:
 
       - name: Capture build metadata
         id: buildmeta
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "datetime=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
+          {
+            echo "sha=$(git rev-parse --short HEAD)"
+            echo "datetime=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         if: startsWith(github.ref, 'refs/tags/')
@@ -182,15 +280,19 @@ jobs:
           if [ -z "$PREV_TAG" ]; then
             git log --pretty=format:"- %s" >> notes.md
           else
-            git log "$PREV_TAG"..HEAD --pretty=format:"- %s" >> notes.md
+            git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" >> notes.md
           fi
 
-          echo "" >> notes.md
-          echo "" >> notes.md
-          echo "---" >> notes.md
-          echo "**Build SHA:** \`${{ steps.buildmeta.outputs.sha }}\`" >> notes.md
-          echo "**Build Time:** ${{ steps.buildmeta.outputs.datetime }}" >> notes.md
-          echo "**Build Config:** ${{ steps.cfg.outputs.config }}" >> notes.md
+          {
+            echo ""
+            echo "---"
+            echo "**Build SHA:** \`${{ steps.buildmeta.outputs.sha }}\`"
+            echo "**Build Time:** ${{ steps.buildmeta.outputs.datetime }}"
+            echo ""
+            echo "**Research variant** (assets below, ${{ steps.cfg.outputs.config }}, reports \`+research\`): unlocked; trusts \`sha256:${{ steps.pubkey.outputs.research }}\`"
+            echo "**Clinical variant** (reports \`+clinical\`): RDP level 1 + WRP + PCROP on first boot; trusts the Cloud KMS key \`sha256:${{ steps.pubkey.outputs.clinical }}\`."
+            echo "Binaries are not attached: \`gs://${GCS_BUCKET}/${GITHUB_REPOSITORY#*/}/${GITHUB_REF_NAME}/\` (private), \`${{ steps.out.outputs.clinical_name }}.bin\` SHA-256 \`${{ steps.out.outputs.clinical_bin_sha256 }}\`"
+          } >> notes.md
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -199,10 +301,11 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           prerelease: ${{ steps.reltype.outputs.prerelease }}
-          body_path: notes.md
-          overwrite_files: true
           make_latest: ${{ steps.reltype.outputs.prerelease == 'false' }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          body_path: notes.md
           files: |
-            build/${{ steps.cfg.outputs.config }}/*.hex
-            build/${{ steps.cfg.outputs.config }}/*.bin
-            _sbom/open-lifu-transmitter-bl.cdx.json
+            _research/open-lifu-transmitter-bl.hex
+            _research/open-lifu-transmitter-bl.bin
+            _research/open-lifu-transmitter-bl.cdx.json
