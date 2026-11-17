@@ -126,6 +126,25 @@ public half of the Cloud KMS HSM key `openlifu-firmware/lifu-transmitter-fw-sign
 `d0538bd8…2b94978`; its private key never leaves the HSM). `generate_keys.py` only writes the research key.
 The private signing key never resides on the device.
 
+```bash
+# Check (or rewrite) the committed clinical public key against Cloud KMS
+# (needs roles/cloudkms.publicKeyViewer; CI runs the --check form on every build)
+python py-tools/export_public_key.py --check \
+  --kms-key projects/openwater-cloud/locations/us-central1/keyRings/openlifu-firmware/cryptoKeys/lifu-transmitter-fw-signing/cryptoKeyVersions/1
+```
+
+## CI and releases
+
+`.github/workflows/build-firmware.yml` builds **both** variants on every run and checks the committed
+clinical PEM against the KMS key (read-only `sa-bl-pubkey-reader`, Workload Identity Federation).
+
+| | Research | Clinical |
+|---|---|---|
+| Build config | `Release` on `X.Y.Z` / `-rc.N` tags; `Debug` on branches and `-dev.N` tags | `Clinical` preset, always |
+| Published | workflow artifact + GitHub release assets `open-lifu-transmitter-bl.{bin,hex,cdx.json}` (names unchanged; used by `openlifu-transmitter-fw`, diathermy `pins.json`, the SDK wheel) | **tags only**, to the private bucket `gs://openwater-firmware-artifacts/open-lifu-transmitter-bl/<tag>/open-lifu-transmitter-bl-<tag>-clinical.{bin,hex,elf,cdx.json}` + `SHA256SUMS` (write-once `sa-bl-artifact-uploader`); never an artifact or release asset |
+
+The release notes give both trusted-key fingerprints and the clinical `.bin` path and SHA-256.
+
 ## Sign & flash the application firmware
 
 Application firmware lives in the separate `openlifu-transmitter-fw` repo. Build it, then sign and
