@@ -35,6 +35,10 @@ enumeration back-channel for the daisy-chained transmitter topology.
   - **I²C DFU** when no USB host is present: an upstream board relays a signed image to a downstream
     board over I²C. The image is verified by the *target* board's secure boot before it can run — the
     relay is a transport, not a trust anchor.
+  - On both, the signed header is checked (signature, version, size) **before** the installed image
+    is erased: a wrong-key, tampered, downgraded or oversized image is refused and the board keeps
+    its firmware. Over I²C the slave leaves the bus for the ~1.5 s check, so the host must retry its
+    status poll (needs the matching openlifu-sdk change).
 - **Anti-rollback.** A signed 16-bit `FwVersion` plus a persistent monotonic **version floor** (flash
   page 126, outside the DFU-writable window). A validly-signed but older image is refused at boot and
   invalidated so it can never execute.
