@@ -263,6 +263,28 @@ void SFU_BOOT_ForceReboot(void)
   }
 }
 
+/**
+  * @brief  Apply the option-byte protections on the forced-DFU path.
+  * @note   A forced DFU session (app DFU request or boot-fail fallback) never runs
+  *         the secure boot service, which is where the option bytes are checked and
+  *         applied. Apply them here too, so a clinical unit is never in DFU with RDP0
+  *         or without WRP/PCROP. If an option byte is written, this resets (OB launch)
+  *         and the next boot comes back here with the protections in place. No-op in
+  *         the research variant.
+  * @retval None
+  */
+void SFU_BOOT_ApplyStaticProtectionsForDfu(void)
+{
+#if !defined(SECBOOT_DISABLE_SECURITY_IPS)
+  FLOW_CONTROL_INIT(uFlowProtectValue, FLOW_CTRL_INIT_VALUE);
+  if (SFU_LL_SECU_CheckApplyStaticProtections() != SFU_SUCCESS)
+  {
+    SFU_EXCPT_Security_Error();
+  }
+  FLOW_CONTROL_CHECK(uFlowProtectValue, FLOW_CTRL_STATIC_PROTECT);
+#endif /* !SECBOOT_DISABLE_SECURITY_IPS */
+}
+
 #define INNER_WIDTH 68
 
 static void PrintBootBanner(void)

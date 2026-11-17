@@ -272,6 +272,12 @@ int main(void)
     SFU_BOOT_InitErrorTypeDef e_boot = SFU_BOOT_RunSecureBootService();
     (void)e_boot;  /* non-zero only on critical SE/security-IP init failure */
   }
+  else
+  {
+    /* Forced DFU bypasses the secure boot service, which is where the option-byte
+     * protections are applied. Apply them here (clinical variant; no-op in research). */
+    SFU_BOOT_ApplyStaticProtectionsForDfu();
+  }
 
   /*
    * Execution only reaches this point when no valid signed application will run

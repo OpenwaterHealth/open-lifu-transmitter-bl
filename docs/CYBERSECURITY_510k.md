@@ -457,20 +457,25 @@ Per FDA labeling expectations, provide to users/operators: `[[TODO: Regulatory t
 
 ## 12. Production hardening requirements (CRITICAL)
 
-> The development configuration disables the STM32 hardware security IP for debuggability
+> The bootloader is built in two variants (`LIFU_BL_VARIANT`, `SBSFU/App/Inc/app_sfu.h`). The
+> **research** variant disables the STM32 hardware security IP for debuggability
 > (`SECBOOT_DISABLE_SECURITY_IPS`), which the build surfaces as intentional `#warning
-> "SFU_*_PROTECT_DISABLED"` reminders. **A device shipped for clinical use MUST be built and
-> provisioned with these protections ENABLED.** This is a release gate.
+> "SFU_*_PROTECT_DISABLED"` reminders. **A device shipped for clinical use MUST run the clinical
+> variant** (preset `Clinical`), which applies the protections below on first boot (check-and-apply,
+> `SECBOOT_OB_DEV_MODE`), also on the forced-DFU path (`SFU_BOOT_ApplyStaticProtectionsForDfu`).
+> This is a release gate.
 
-| Protection | Dev state | Production requirement |
-|------------|-----------|------------------------|
-| RDP (readout protection) | Off | **RDP Level ≥ 1** (Level 2 disables debug permanently — irreversible) |
-| WRP (write protection) | Off | **WRP on bootloader + SE pages (0–31)** (immutability) |
-| PCROP (code readout protection) | Off | **PCROP on key/SE region** |
-| DAP / debug access | Open | **Disabled** in production |
-| MPU / SE isolation | Off | **Enabled** (`SFU_ISOLATE_SE_WITH_MPU`) |
-| IWDG watchdog | Enabled in BL (~8.2 s) | **Enabled** (confirm window vs. app timing) |
-| Secure user memory (HDP/other) | Off | **Enabled** if required by risk assessment |
+| Protection | Research variant | Clinical variant |
+|------------|------------------|------------------|
+| RDP (readout protection) | Off (Level 0) | **RDP Level 1** (`SFU_RDP_PROTECT_ENABLE`). Level 2 (`SFU_FINAL_SECURE_LOCK_ENABLE`) stays off: it is irreversible. |
+| WRP (write protection) | Off | **WRP area A over pages 0–31** (`0x08000000`–`0x0800FFFF`: bootloader + SE) |
+| PCROP (code readout protection) | Off | **PCROP over the SE key region** (`0x08000400`–`0x080004FF`; `se_key.s` is execute-only MOVW/MOVT code) |
+| DAP / debug access | Open | **SWD pins released** by SBSFU before launch (`SFU_DAP_PROTECT_ENABLE`); RDP1 blocks flash access from a debugger |
+| DMA | Untouched | **DMA1/DMA2 clocks disabled** while SBSFU runs (`SFU_DMA_PROTECT_ENABLE`) |
+| MPU / SE isolation | Off | **Off** — the application runs privileged, so the MPU cannot fence it out of the SE; compensating controls: PCROP on the key, SE-RAM key wipe on exit (`SFU_WIPE_SE_RAM_ON_EXIT`, both variants), SE call-gate caller check. The L443 firewall (`SFU_FWALL_PROTECT_ENABLE`) is not used. |
+| IWDG watchdog | Armed by `main()` (~8.2 s) | Same |
+| Secure user memory | N/A (STM32H7 feature) | N/A (`#error` if enabled) |
+| Trusted signing key | Research key (`py-tools/keys/research/`) | Cloud KMS HSM key (`py-tools/keys/clinical/`) |
 
 `[[TODO: Manufacturing — document the Option Byte provisioning step and verification at production
 test, and confirm keys are unique-per-product or per-product-family per the security risk assessment.
