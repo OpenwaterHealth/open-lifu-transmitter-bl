@@ -26,6 +26,11 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+/* app_sfu.h defines the SFU_*_PROTECT_ENABLE switches that select the FLOW_STEP_* values
+   below. Without it, a file that includes sfu_boot.h first (sfu_boot.c) sees every step as 0
+   while sfu_low_level_security.c steps the real values, and every flow check fails as soon
+   as a protection is enabled. */
+#include "app_sfu.h"
 
 /* Exported types ------------------------------------------------------------*/
 /**
@@ -193,6 +198,7 @@ extern uint32_t uFlowCryptoValue;
 /* Exported functions ------------------------------------------------------- */
 SFU_BOOT_InitErrorTypeDef SFU_BOOT_RunSecureBootService(void);
 void SFU_BOOT_ForceReboot(void);
+void SFU_BOOT_ApplyStaticProtectionsForDfu(void);
 
 #ifdef __cplusplus
 }

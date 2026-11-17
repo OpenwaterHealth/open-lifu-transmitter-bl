@@ -85,7 +85,8 @@ jobs:
           python3 scripts/gen_sbom.py --root . --manifest scripts/sbom-manifest.json \
             --name "${GITHUB_REPOSITORY#*/}" --config Release \
             --toolchain "$TOOLCHAIN" --newlib-version "$NEWLIB" --build-image "$IMG_REF" \
-            --trusted-key research=py-tools/keys/ecdsa_public.pem \
+            --trusted-key research=py-tools/keys/research/ecdsa_public.pem \
+            --trusted-key clinical=py-tools/keys/clinical/ecdsa_public.pem \
             -o sbom.cdx.json
 
       # 4. Vulnerability scan of the generated SBOM

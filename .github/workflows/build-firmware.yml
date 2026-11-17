@@ -49,7 +49,7 @@ jobs:
 
       # Regenerate the SECoreBin key file from key material kept OUT of git:
       #   - AES-128 key  : from the SECOREBIN_AES_KEY secret (base64 of the 16 raw bytes)
-      #   - ECC pub key  : derived from the committed py-tools/keys/ecdsa_public.pem
+      #   - ECC pub key  : derived from the committed py-tools/keys/research/ecdsa_public.pem
       # se_key.s embeds the AES secret, so it is .gitignored and produced here at
       # build time. The ECDSA *private* signing key is NOT needed to build the BL.
       - name: Regenerate se_key.s from key material
@@ -72,7 +72,7 @@ jobs:
           import sys
           from cryptography.hazmat.primitives import serialization
           tmp = sys.argv[1]
-          pub = serialization.load_pem_public_key(open("py-tools/keys/ecdsa_public.pem", "rb").read())
+          pub = serialization.load_pem_public_key(open("py-tools/keys/research/ecdsa_public.pem", "rb").read())
           n = pub.public_numbers()
           open(f"{tmp}/pub_x.bin", "wb").write(n.x.to_bytes(32, "big"))
           open(f"{tmp}/pub_y.bin", "wb").write(n.y.to_bytes(32, "big"))
@@ -132,7 +132,8 @@ jobs:
           python3 scripts/gen_sbom.py --root . --manifest scripts/sbom-manifest.json \
             --name "${GITHUB_REPOSITORY#*/}" --config "${{ steps.cfg.outputs.config }}" \
             --toolchain "$TOOLCHAIN" --newlib-version "$NEWLIB" --build-image "$IMG_REF" \
-            --trusted-key research=py-tools/keys/ecdsa_public.pem \
+            --trusted-key research=py-tools/keys/research/ecdsa_public.pem \
+            --trusted-key clinical=py-tools/keys/clinical/ecdsa_public.pem \
             -o _sbom/open-lifu-transmitter-bl.cdx.json
 
       - name: Upload firmware artifact

@@ -140,9 +140,22 @@ extern "C" {
  *
  */
 
-#define SECBOOT_DISABLE_SECURITY_IPS  /*!< DEVELOPMENT MODE: All flash/OB security features disabled.
-                                         Re-enable individual protections (WRP, RDP, PCROP, DAP) when
-                                         moving to production. See app_sfu.h security block below. */
+/* Build variant (CMake option LIFU_BL_VARIANT, see CMakeLists.txt):
+ *   research : protections OFF (RDP0, no WRP/PCROP); trusts the research key
+ *              (py-tools/keys/research/ecdsa_public.pem). Unlocked, re-flashable by SWD.
+ *   clinical : protections ON (WRP over the bootloader, PCROP over the SE key, RDP level 1,
+ *              DAP and DMA), applied on first boot; trusts the KMS key
+ *              (py-tools/keys/clinical/ecdsa_public.pem).
+ */
+#if defined(LIFU_BL_CLINICAL) && defined(LIFU_BL_RESEARCH)
+#error "Define exactly one of LIFU_BL_CLINICAL / LIFU_BL_RESEARCH (set by LIFU_BL_VARIANT)."
+#elif defined(LIFU_BL_CLINICAL)
+#define SECBOOT_ENABLE_SECURITY_IPS   /*!< informational: SECBOOT_DISABLE_SECURITY_IPS is NOT defined */
+#elif defined(LIFU_BL_RESEARCH)
+#define SECBOOT_DISABLE_SECURITY_IPS  /*!< research: all flash/OB security features disabled */
+#else
+#error "No bootloader variant: configure with -DLIFU_BL_VARIANT=research|clinical."
+#endif
 
 #if !defined(SECBOOT_DISABLE_SECURITY_IPS)
 
@@ -159,11 +172,9 @@ extern "C" {
 #define SFU_DMA_PROTECT_ENABLE
 /*#define SFU_IWDG_PROTECT_ENABLE*/  /*!< Disabled: the bootloader main() owns the IWDG
                                         (armed before the secure boot service, refreshed in the DFU loop). */
-#define SFU_MPU_PROTECT_ENABLE     /*!< MPU protection:
-                                        Enables/Disables the MPU protection.
-                                        If Secure Engine isolation is ensured by MPU (see SFU_ISOLATE_SE_WITH_MPU in
-                                        SE_CoreBin\Inc\se_low_level.h), then this switch also enables/disables it, in
-                                        addition to the overall MPU protection. */
+/*#define SFU_MPU_PROTECT_ENABLE*/   /*!< OFF in every variant: the application runs privileged, so the
+                                        MPU cannot fence it out of the SE regions, and the launch path
+                                        disables the MPU before the jump. See the key-RAM wipe note below. */
 
 
 /*#define SFU_FINAL_SECURE_LOCK_ENABLE */   /*!< WARNING: Should be enabled at the end of product development and test
@@ -175,9 +186,8 @@ extern "C" {
 #define SFU_PROTECT_RDP_LEVEL  (OB_RDP_LEVEL_2)  /*!< RDP level2 for product on the field. Final OB lock, Debug
                                                       completely disabled, OB update no more possible  */
 
-#define SFU_SECURE_USER_PROTECT_ENABLE /*!< Only accessible in Secure access mode,
-                                          the Secure user software is stored in the secure user memory, a configurable
-                                          protected area which is part of the user main memory. */
+/* SFU_SECURE_USER_PROTECT_ENABLE (secure user memory) is an STM32H7 feature: the L443
+   has none, so it is never defined here. */
 
 #else
 #define SFU_PROTECT_RDP_LEVEL  (OB_RDP_LEVEL_1)  /*!< RDP level is set as 1 for debugging purposes. A product on the
@@ -205,21 +215,24 @@ extern "C" {
  * material out of SE RAM" exfil path and changes nothing else vs. the working
  * boot path.
  *
- * Still deferred (needs the option-byte pass):
- *   - The SE *flash* key (se_key.s AES key) stays readable by a privileged app
- *     and via DFU UPLOAD until PCROP (execute-only) is applied to the SE key
- *     region. PCROP is the mechanism that hides the flash key without requiring
- *     the app to be unprivileged.
+ * The SE *flash* key (se_key.s) is execute-only code (MOVW/MOVT/STM): the
+ * clinical variant applies PCROP to the SE key region so neither a privileged
+ * app nor a DFU UPLOAD can read it. The research variant leaves it readable.
+ *
+ * Still deferred:
  *   - Full ST-style app<->SE isolation would require SFU_MPU_PROTECT_ENABLE +
  *     SFU_MPU_UNPRIV_BOOT AND an unprivileged-safe application (a stock CubeMX
  *     app HardFaults unprivileged). The plumbing for that path is left in place
  *     but gated off.
  */
-#if defined(SECBOOT_DISABLE_SECURITY_IPS)
+/* Both variants: the wipe must not depend on the security-IP switch, or turning
+   the protections on would silently drop it. */
 #define SFU_WIPE_SE_RAM_ON_EXIT              /*!< zeroize SE key RAM before exit */
 /* #define SFU_MPU_PROTECT_ENABLE */         /*!< OFF: no benefit for a privileged app; see above */
 /* #define SFU_MPU_UNPRIV_BOOT */            /*!< OFF: needs an unprivileged-safe app */
-#endif /* SECBOOT_DISABLE_SECURITY_IPS */
+#if defined(SFU_MPU_PROTECT_ENABLE) || defined(SFU_SECURE_USER_PROTECT_ENABLE)
+#error "MPU isolation / secure user memory are not supported on this target (see above)."
+#endif
 
 /**
   * The define below (SECBOOT_OB_DEV_MODE) determines if the OPTION BYTES should be handled in Development mode or not.

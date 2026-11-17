@@ -50,7 +50,15 @@ endif()
 
 string(TIMESTAMP FW_BUILD_TIME_UTC "%Y-%m-%d %H:%M:%S UTC" UTC)
 
-message(STATUS "FW version   : ${FW_GIT_DESCRIBE}")
+# Bootloader variant (see app_sfu.h and the target settings below). Declared here so
+# the version string can carry it: FW_VERSION (DFU version read, USB product string
+# "OW DFU <version>") is the git describe plus "+research" or "+clinical" (semver
+# build metadata, as the firmware's "+fda"), so the host can tell the two apart.
+set(LIFU_BL_VARIANT "research" CACHE STRING "Bootloader variant: research or clinical")
+set_property(CACHE LIFU_BL_VARIANT PROPERTY STRINGS research clinical)
+set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${LIFU_BL_VARIANT}")
+
+message(STATUS "FW version   : ${FW_VERSION_STRING}")
 message(STATUS "FW git sha   : ${FW_GIT_SHA}")
 message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
 
@@ -148,6 +156,25 @@ set_source_files_properties(
     Middlewares/ST/STM32_Secure_Engine/Core/se_interface_common.c
     PROPERTIES COMPILE_OPTIONS "-Os"
 )
+
+# Bootloader variant (LIFU_BL_VARIANT, declared above; see app_sfu.h):
+#   research : unlocked (RDP0, no WRP/PCROP), trusts py-tools/keys/research/ecdsa_public.pem
+#   clinical : WRP over the bootloader, PCROP over the SE key, RDP level 1, DAP and DMA
+#              protections, applied on first boot; trusts the KMS key
+#              py-tools/keys/clinical/ecdsa_public.pem. No debug console.
+if(LIFU_BL_VARIANT STREQUAL "clinical")
+    if(DEBUG_ENABLED)
+        message(FATAL_ERROR "DEBUG_ENABLED is not allowed in the clinical bootloader variant")
+    endif()
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE LIFU_BL_CLINICAL)
+elseif(LIFU_BL_VARIANT STREQUAL "research")
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE LIFU_BL_RESEARCH)
+else()
+    message(FATAL_ERROR "LIFU_BL_VARIANT must be research or clinical, got '${LIFU_BL_VARIANT}'")
+endif()
+# The SE key block (SECoreBin/Startup/se_key.s) must be generated from this variant's PEM.
+set(LIFU_BL_PEM "${CMAKE_SOURCE_DIR}/py-tools/keys/${LIFU_BL_VARIANT}/ecdsa_public.pem")
+message(STATUS "BL variant   : ${LIFU_BL_VARIANT} (trusts ${LIFU_BL_PEM})")
 
 if(DEBUG_ENABLED)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/logging.c)
