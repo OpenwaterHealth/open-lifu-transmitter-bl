@@ -113,6 +113,28 @@ jobs:
           done
           [ "$missing" -eq 0 ]
 
+      # ---------------------------
+      # SBOM (CycloneDX 1.6): scripts/gen_sbom.py with the build image's toolchain and
+      # newlib versions and the reviewed, hash-pinned scripts/sbom-manifest.json.
+      # Written to _sbom/ (the container wrote build/ as root, so the runner cannot
+      # write there). Uploaded with the firmware and attached to tagged releases.
+      # ---------------------------
+      - name: Generate SBOM
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/openwaterhealth/stm32-build-env:latest
+          IMG_REF="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMG")"
+          TOOLCHAIN="$(docker run --rm "$IMG" arm-none-eabi-gcc --version | head -1)"
+          NEWLIB="$(docker run --rm "$IMG" sh -c 'echo "#include <newlib.h>" | arm-none-eabi-gcc -E -dM -' \
+                    | sed -n 's/^#define _NEWLIB_VERSION "\(.*\)"/\1/p')"
+          test -n "$NEWLIB"
+          mkdir -p _sbom
+          python3 scripts/gen_sbom.py --root . --manifest scripts/sbom-manifest.json \
+            --name "${GITHUB_REPOSITORY#*/}" --config "${{ steps.cfg.outputs.config }}" \
+            --toolchain "$TOOLCHAIN" --newlib-version "$NEWLIB" --build-image "$IMG_REF" \
+            --trusted-key research=py-tools/keys/ecdsa_public.pem \
+            -o _sbom/open-lifu-transmitter-bl.cdx.json
+
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
@@ -121,6 +143,7 @@ jobs:
             build/${{ steps.cfg.outputs.config }}/*.hex
             build/${{ steps.cfg.outputs.config }}/*.bin
             build/${{ steps.cfg.outputs.config }}/*.elf
+            _sbom/open-lifu-transmitter-bl.cdx.json
 
       - name: Detect release type
         id: reltype
@@ -181,3 +204,4 @@ jobs:
           files: |
             build/${{ steps.cfg.outputs.config }}/*.hex
             build/${{ steps.cfg.outputs.config }}/*.bin
+            _sbom/open-lifu-transmitter-bl.cdx.json

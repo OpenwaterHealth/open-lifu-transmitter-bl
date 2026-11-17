@@ -864,6 +864,7 @@ void Error_Handler(void)
   * @param  line: assert_param error line source number
   * @retval None
   */
+// cppcheck-suppress constParameterPointer ; signature fixed by assert_param() in stm32l4xx_hal_conf.h
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
