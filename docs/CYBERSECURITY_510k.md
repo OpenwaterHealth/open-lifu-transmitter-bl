@@ -195,7 +195,7 @@ the **inter-board relay** path unique to the daisy-chained transmitter architect
 | T-3 | Tampering | Attacker modifies the bootloader or keys. | Bootloader + SECoreBin in read-only pages 0–31; (production) Flash WRP/RDP/PCROP and SE MPU isolation. | C-3, C-7 |
 | T-4 | Information disclosure | Firmware IP extracted in transit. | AES-128-CBC encryption of the distributed payload. | C-5 |
 | T-5 | Information disclosure | Keys/firmware read out via debug port. | (Production) RDP Level ≥ 1, DAP disable, PCROP on key region; SE call-gate isolation. | C-7 |
-| T-6 | Denial of service | Corrupt/partial update bricks a board. | Update is verified before execution; invalid slot → safe recovery (DFU re-entry), never executes bad code; boot-fail counter forces recovery DFU. | C-2, C-6 |
+| T-6 | Denial of service | Corrupt/partial update bricks a board. | Update is verified before execution; invalid slot → safe recovery (DFU re-entry), never executes bad code; boot-fail counter forces recovery DFU. A wrong-key, tampered, downgraded or oversized image is refused **before the installed image is erased** (§5.4). Residual: the DFU erase itself is not authenticated, so a host with access can still interrupt an accepted download or send a genuine header with a corrupted body, leaving the board in recoverable DFU. | C-2, C-6 |
 | T-7 | Tampering | "Additional code beyond firmware" hidden in slot. | Bootloader verifies the unused slot region is empty before launch. | C-2 |
 | T-8 | Elevation of privilege | Application calls protected Secure Engine services illegitimately. | SE call-gate validates caller region; (production) MPU privilege isolation. | C-7 |
 | T-9 | Tampering | Rollback to a known-vulnerable signed firmware. | Signed-header firmware version (`FwVersion`) + **boot-time anti-rollback**: the bootloader refuses to launch any image whose verified version is below a persistent monotonic floor, and invalidates the downgrade so it cannot boot (§5.6). **Implemented & bench-verified on STM32L443.** | C-8 |
@@ -272,6 +272,25 @@ the next reset before it can execute.
   image is written to the slot.
 - Both interfaces restrict writes/erases to the **application slot**; the bootloader, anti-rollback,
   and user-config pages are rejected (out-of-window addresses return an error).
+- **Header check before erase (both interfaces, `Core/Src/dfu_guard.c`).** There is one slot, so a
+  download must erase the installed image before the new one is complete. Erase requests are
+  therefore recorded, not executed: the first block a host writes must be the signed header at the
+  slot start, and it is checked first — magic, **ECDSA header signature through the Secure Engine**,
+  `FwVersion` not below the installed version or the persistent floor (§5.6), and `FwSize` fits the
+  slot. Only then is each requested page erased, just before its first block is programmed; requested
+  pages the image does not reach are erased when the download finishes (USB: after manifestation;
+  I²C: on MANIFEST, or on RESET). A wrong-key image (another board's or another trust domain's), a
+  tampered header, a downgrade, or an oversized image is refused with the **installed image intact**
+  (USB: the DNLOAD fails, `dfuERROR`; I²C: status `0x05` REJECTED). Each host request still carries
+  at most one page erase, so the host protocol is unchanged. The body hash is still only checked at
+  boot: a genuine header with a corrupted body is accepted, then refused at the next boot (TC-DFU-08).
+- **Timing.** The signature check takes ~1.5 s with interrupts masked (Secure Engine call). USB
+  advertises a 2.5 s poll interval for the header block. On I²C the slave leaves the bus for the
+  check, so the master's status polls are NACKed (instead of the clock being held past the master's
+  250 ms transaction timeout); the host must retry the poll until a status arrives. **Host tools
+  that treat a failed poll as fatal (openlifu-sdk before the matching change) abort an I²C slave
+  update after the header block**, leaving the slave in DFU with an incomplete image (recoverable
+  by repeating the update with a fixed host).
 - After download the board resets and re-runs full verification before executing the new image.
 
 ### 5.5 Cryptographic design
@@ -296,9 +315,10 @@ version (threat T-9), the bootloader enforces a monotonic version floor:
   If `FwVersion < floor`, the bootloader (a) records a version-rejected error, (b) **invalidates the
   image** (erases its header) so it can never execute — even after a power cycle — and (c) resets into
   the controlled DFU recovery path. If `FwVersion ≥ floor`, the floor is raised and the image launches.
-- **DFU-time check (secondary / fast-fail).** During download, the bootloader also compares the
-  incoming image's version against the installed version and rejects an obvious downgrade before
-  committing, giving the operator immediate feedback. The boot-time floor remains authoritative.
+- **DFU-time check (secondary / fast-fail).** Before anything is erased, the bootloader checks the
+  incoming header's signature and compares its (now authenticated) `FwVersion` against the higher of
+  the installed version and the persistent floor; a downgrade is refused with the installed image
+  intact (§5.4). The boot-time floor remains authoritative.
 - **Residual risk.** The floor can only be cleared by erasing page 126, which requires debug/SWD
   access. Production units lock the debug port (RDP, §12), so the floor cannot be reset in the field.
 
@@ -392,11 +412,17 @@ vulnerability testing, and penetration testing.
 | TC-DFU-01 | USB DFU install of signed image succeeds | dfu-util + pure-Python flasher | **Pass** (verified on STM32L443) |
 | TC-DFU-02 | DFU write to bootloader pages rejected | `dfu-util` download targeting 0x08000000 | **Pass** (out-of-window rejected; bootloader pages read-only in descriptor) |
 | TC-DFU-03 | DFU write outside the active slot rejected | `dfu-util` download above the slot end (0x0803F000 / 0x0803F800) | **Pass** (floor + user-config pages rejected) |
+| TC-DFU-04 | Wrong-key image refused before erase (USB + I²C) | Image signed with the console key (other board); host erases the slot, then writes | **Pass** (2026-11-17, L443, research bench build): header block refused (USB `dfuERROR`; I²C status 0x05); slot read back over SWD identical to the installed image |
+| TC-DFU-05 | Tampered header refused before erase (USB + I²C) | `FwVersion` byte flipped after signing | **Pass** (2026-11-17): refused at the header block; installed image intact |
+| TC-DFU-06 | Downgrade refused before erase (USB + I²C) | (a) version below installed; (b) version equal to installed but below the persistent floor | **Pass** (2026-11-17): both refused at the header block; installed image intact |
+| TC-DFU-07 | Oversized image refused before erase (USB + I²C) | Genuinely signed header with `FwSize` > slot | **Pass** (2026-11-17): refused at the header block; installed image intact |
+| TC-DFU-08 | Genuine header, corrupted body | Body byte flipped after signing | **Pass** (2026-11-17, USB): accepted before erase (expected), refused at boot (slot zeroed), board in recoverable DFU |
+| TC-DFU-09 | Upgrade and smaller-image tail (USB + I²C) | Install v+1; then a 20 KB larger image; then a normal-size image over it | **Pass** (2026-11-17): each boots, floor raised each time; pages beyond the smaller image erased (USB after manifestation, I²C on MANIFEST); SDK `program_transmitter` path unchanged |
 | TC-USERCFG-01 | DFU write/erase of user-config rejected | Target 0x0803F800 | **Pass** (outside DFU writable window) |
 | TC-FAILCLOSED-01 | No/invalid FW → safe recovery, no code exec | Empty slot | **Pass** (enters DFU; no unauthenticated execution) |
 | TC-IMMUT-01 | Bootloader not modifiable via update path | Hash bootloader pages 0–31 before/after a DFU write attempt to 0x08000000 | Write rejected; hash-invariance `[[TODO: capture on L443]]` |
 | TC-I2CDFU-01 | I²C-DFU install of signed image succeeds | Master relays signed image to a downstream slave over I²C; slave verifies + boots | **Pass** (verified on STM32L443, full cycle) |
-| TC-I2CDFU-02 | I²C-DFU install of unsigned/tampered image rejected by slave | Relay a tampered image over I²C; observe slave secure-boot rejection | Expected reject at slave secure boot (relay is transport-only). `[[TODO: capture on L443]]` |
+| TC-I2CDFU-02 | I²C-DFU install of unsigned/tampered image rejected by slave | Relay a tampered image over I²C | **Pass** (2026-11-17): the slave refuses the header before erasing (status 0x05; TC-DFU-04/05); relay is transport-only |
 | TC-I2CDFU-03 | I²C-DFU write outside the active slot rejected | Relay a write targeting the bootloader / floor / config pages | **Pass** (I²C-DFU writable window clamped to slot; out-of-window returns BAD_ADDR) |
 | TC-BACKCHAN-01 | Two DFU-mode boards get unique I²C addresses | Drop two slaves into DFU; re-enumerate; verify both at unique 0x20/0x21 (not 0x72) and each independently programmable | **Pass** (verified on STM32L443; both programmed at assigned addresses, both returned to app) |
 | TC-HWPROT-01 | RDP/WRP/PCROP/DAP effective | Read/modify attempts via SWD | `[[TODO: production build]]` |

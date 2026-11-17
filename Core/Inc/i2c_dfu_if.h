@@ -100,6 +100,11 @@ extern "C" {
 #define I2C_DFU_STATUS_ERROR       0x02U  /**< Generic / protocol error */
 #define I2C_DFU_STATUS_BAD_ADDR    0x03U  /**< Address outside writable region */
 #define I2C_DFU_STATUS_FLASH_ERR   0x04U  /**< HAL flash erase/program failure */
+/** Image refused before anything was erased: the first DNLOAD was not a signed
+ *  SFU1 header at the slot start, or the header failed the check (signature,
+ *  version below the installed one / anti-rollback floor, size). The installed
+ *  image is intact. See Core/Inc/dfu_guard.h. */
+#define I2C_DFU_STATUS_REJECTED    0x05U
 
 /* -------------------------------------------------------------------------
  * DFU state codes  (byte[1] of every read response)

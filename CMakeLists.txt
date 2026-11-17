@@ -131,6 +131,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/lwrb.c
     Core/Src/utils.c
     Core/Src/i2c_dfu_if.c
+    Core/Src/dfu_guard.c
 
     # SBSFU sources
     ${SBSFU_APP_SOURCES}

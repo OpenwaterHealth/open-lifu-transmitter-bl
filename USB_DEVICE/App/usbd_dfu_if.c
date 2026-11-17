@@ -24,6 +24,7 @@
 #include "main.h"
 #include "memory_map.h"
 #include "version.h"   /* FW_VERSION (CMake-generated git describe) */
+#include "dfu_guard.h" /* pre-erase header check (shared with the I2C DFU) */
 #include <string.h>
 /* USER CODE END INCLUDE */
 
@@ -39,16 +40,19 @@
  * manif_state already reads DFU_MANIFEST_COMPLETE). */
 static volatile uint8_t s_dfu_image_written = 0U;
 
-/* Anti-rollback (DFU-time enforcement). Before the first erase wipes the active
- * slot, we latch the version of the currently-installed image; after the new
- * image is downloaded we compare. A downgrade is rejected and the image is
- * destroyed so it can never boot. The floor is the currently-installed version
- * (0 if the slot has no valid "SFU1" header). NOTE: this guards the DFU update
+/* Anti-rollback and image checks happen BEFORE anything is erased: erase
+ * requests are deferred and the first block (the signed header) is checked
+ * through the Secure Engine first — see Core/Inc/dfu_guard.h. A downgrade is
+ * therefore refused with the installed image intact; DFU_IsRollback() below
+ * stays as a second check after the download. NOTE: this guards the DFU update
  * path only; a direct SWD/debugger reflash bypasses it, so production units must
  * keep the debug port locked (RDP). The boot path additionally enforces the
  * persistent floor (see SBSFU/Target/Src/anti_rollback.c). */
-static uint8_t  s_cur_ver_captured  = 0U;   /* 1 once s_current_fw_version is latched */
-static uint16_t s_current_fw_version = 0U;  /* installed FwVersion at DFU entry (the floor) */
+
+/* Where the next data block will land (0 = none written since the last erase
+ * request). The GETSTATUS poll interval is computed before the block arrives,
+ * and the DfuSe address pointer it receives is not the block address. */
+static uint32_t s_next_write_addr = 0U;
 
 /* Set when the host writes to DFU_RESET_VIRT_ADDR (see MEM_If_Write_FS). The
  * bootloader main loop polls DFU_ResetRequested() and performs the reset. */
@@ -212,6 +216,9 @@ __ALIGN_BEGIN USBD_DFU_MediaTypeDef USBD_DFU_fops_FS __ALIGN_END =
 uint16_t MEM_If_Init_FS(void)
 {
   /* USER CODE BEGIN 0 */
+  /* New session: every download starts with an unchecked header. */
+  DFU_Guard_StartSession();
+  s_next_write_addr = 0U;
   return (USBD_OK);
   /* USER CODE END 0 */
 }
@@ -243,42 +250,19 @@ uint16_t MEM_If_Erase_FS(uint32_t Add)
     return (USBD_FAIL);
   }
 
-  /* Anti-rollback: latch the currently-installed version BEFORE any erase wipes
-   * the active-slot header. Done once per DFU session, on the first erase (the
-   * slot is still intact at this point regardless of which page erases first). */
-  if (s_cur_ver_captured == 0U)
+  /* Deferred until this download's header has passed the check; executed
+   * immediately once it has (e.g. a host repairing a page after read-back).
+   * The erase also clears the failsafe boot counter (RTC->BKP6R), so the new
+   * image gets a clean set of boot attempts. */
+  s_next_write_addr = 0U;   /* a download (or repair) starts with erase requests */
+  if ((Add & ~(DFU_PAGE_SIZE - 1U)) == APP_FLASH_BASE)
   {
-    s_cur_ver_captured   = 1U;
-    s_current_fw_version = dfu_read_slot_version();
+    /* A new download: disarm the post-manifest reboot until its header is
+     * accepted and written, so a refused download never triggers a reboot. */
+    s_dfu_image_written = 0U;
   }
-
-  FLASH_EraseInitTypeDef eraseInit = {0};
-  uint32_t pageError = 0;
-
-  eraseInit.TypeErase = FLASH_TYPEERASE_PAGES;
-  eraseInit.Banks     = FLASH_BANK_1;
-  eraseInit.Page      = (uint32_t)((Add - FLASH_BASE) / DFU_PAGE_SIZE);
-  eraseInit.NbPages   = 1;
-
-  HAL_FLASH_Unlock();
-  HAL_StatusTypeDef status = HAL_FLASHEx_Erase(&eraseInit, &pageError);
-  HAL_FLASH_Lock();
-
-  if (status == HAL_OK)
-  {
-    /* A new application image is being installed: clear the failsafe boot
-     * counter (RTC->BKP6R) so the freshly flashed firmware gets a clean set of
-     * boot attempts. Without this, if we entered DFU because the counter hit
-     * BL_BOOT_FAIL_MAX, it would still be at the limit after the download and
-     * the bootloader would refuse to launch the new image until a power cycle.
-     * Backup-domain write access was already enabled in main(); re-assert DBP
-     * defensively as this is a one-shot, low-cost operation. */
-    HAL_PWR_EnableBkUpAccess();
-    RTC->BKP6R = 0U;
-    __DSB();
-  }
-
-  return (status == HAL_OK) ? USBD_OK : USBD_FAIL;
+  return (DFU_Guard_RequestErase(Add & ~(DFU_PAGE_SIZE - 1U)) == DFU_GUARD_OK)
+         ? USBD_OK : USBD_FAIL;
 
   /* USER CODE END 2 */
 }
@@ -313,6 +297,15 @@ uint16_t MEM_If_Write_FS(uint8_t *src, uint8_t *dest, uint32_t Len)
     return (USBD_FAIL);
   }
 
+  /* First block of a download: it must be the signed header at the slot start
+   * and pass the check before anything is erased. Then erase any deferred page
+   * this block lands in. A refused header fails the DNLOAD with the installed
+   * image intact. */
+  if (DFU_Guard_PrepareWrite(src, addr, Len) != DFU_GUARD_OK)
+  {
+    return (USBD_FAIL);
+  }
+
   uint32_t remaining = Len;
 
   HAL_FLASH_Unlock();
@@ -336,6 +329,7 @@ uint16_t MEM_If_Write_FS(uint8_t *src, uint8_t *dest, uint32_t Len)
 
   HAL_FLASH_Lock();
 
+  s_next_write_addr   = addr; /* already advanced past this block */
   s_dfu_image_written = 1U;   /* a new image was programmed: arm post-manifest reboot */
 
   return (USBD_OK);
@@ -409,16 +403,36 @@ uint16_t MEM_If_GetStatus_FS(uint32_t Add, uint8_t Cmd, uint8_t *buffer)
   uint32_t timeout_ms;
   switch (Cmd)
   {
+    /* The DFU class asks for the poll interval first and runs the Erase()/
+     * Write() callback afterwards, so the interval must cover the work that
+     * callback will do (see dfu_guard.h for the deferred erase). */
     case DFU_MEDIA_PROGRAM:
-      /* A full 1 KB block is 128 doubleword programs at ~90 us each with
-       * instruction fetch stalled — ~12 ms. Advertising less makes hosts
-       * poll GETSTATUS mid-program, which has been observed to race the
-       * middleware into a spurious STALL. */
-      timeout_ms = 15U;    /* per 1 KB write block */
+    {
+      /* Add is the DfuSe address pointer, not the block address: the next
+       * block lands where the previous write stopped. */
+      uint32_t next = (s_next_write_addr != 0U) ? s_next_write_addr : Add;
+      if (DFU_Guard_HeaderAccepted() == 0U)
+      {
+        timeout_ms = 2500U;  /* header block: ECDSA check (~1.5 s measured) + erase + program */
+      }
+      else if (DFU_Guard_IsErasePending(next) != 0U)
+      {
+        timeout_ms = 70U;    /* deferred page erase (~25 ms) + program */
+      }
+      else
+      {
+        /* A full 1 KB block is 128 doubleword programs at ~90 us each with
+         * instruction fetch stalled — ~12 ms. Advertising less makes hosts
+         * poll GETSTATUS mid-program, which has been observed to race the
+         * middleware into a spurious STALL. */
+        timeout_ms = 15U;    /* per 1 KB write block */
+      }
       break;
+    }
 
     case DFU_MEDIA_ERASE:
-      timeout_ms = 50U;    /* 2 KB page erase is ~25 ms max on STM32L4 */
+      /* Deferred (nothing erased) until a header is accepted. */
+      timeout_ms = (DFU_Guard_HeaderAccepted() == 0U) ? 10U : 50U;
       break;
 
     default:
@@ -510,7 +524,10 @@ static uint16_t dfu_read_slot_version(void)
 /**
   * @brief  Anti-rollback check on the just-downloaded image.
   * @note   Compares the new image's FwVersion (read from its freshly written
-  *         header) against the version that was installed at DFU entry. The
+  *         header) against the higher of the version installed at DFU entry
+  *         and the persistent anti-rollback floor (DFU_Guard_MinVersion). The
+  *         pre-erase header check already refuses a downgrade; this is a
+  *         second check after the download. The
   *         version field is part of the ECDSA-signed header region, so an
   *         attacker cannot forge a higher value on a genuinely-signed old image;
   *         a forged-high but unsigned image is still rejected by SBSFU at boot.
@@ -526,7 +543,7 @@ uint8_t DFU_IsRollback(void)
      * reject it at boot anyway. */
     return 0U;
   }
-  return (new_ver < s_current_fw_version) ? 1U : 0U;
+  return (new_ver < DFU_Guard_MinVersion()) ? 1U : 0U;
 }
 
 /**
@@ -537,7 +554,7 @@ uint8_t DFU_IsRollback(void)
   */
 void DFU_InvalidateImage(void)
 {
-  (void)MEM_If_Erase_FS(APP_FLASH_BASE);
+  (void)DFU_Guard_ErasePageNow(APP_FLASH_BASE);   /* not deferred: destroy it now */
 }
 
 /**
