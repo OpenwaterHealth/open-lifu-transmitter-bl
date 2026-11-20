@@ -289,8 +289,9 @@ jobs:
             echo "**Build SHA:** \`${{ steps.buildmeta.outputs.sha }}\`"
             echo "**Build Time:** ${{ steps.buildmeta.outputs.datetime }}"
             echo ""
-            echo "**Research variant** (assets below, ${{ steps.cfg.outputs.config }}, reports \`+research\`): unlocked; trusts \`sha256:${{ steps.pubkey.outputs.research }}\`"
-            echo "**Clinical variant** (reports \`+clinical\`): RDP level 1 + WRP + PCROP on first boot; trusts the Cloud KMS key \`sha256:${{ steps.pubkey.outputs.clinical }}\`."
+            echo "**Research variant** (assets below, ${{ steps.cfg.outputs.config }}): unlocked; trusts \`sha256:${{ steps.pubkey.outputs.research }}\`"
+            echo "**Clinical variant**: RDP level 1 + WRP + PCROP on first boot; trusts the Cloud KMS key \`sha256:${{ steps.pubkey.outputs.clinical }}\`."
+            echo "Both report the same version; which one a unit runs is told by the key its firmware is signed with (openlifu-sdk \`firmware_domain()\`)."
             echo "Binaries are not attached: \`gs://${GCS_BUCKET}/${GITHUB_REPOSITORY#*/}/${GITHUB_REF_NAME}/\` (private), \`${{ steps.out.outputs.clinical_name }}.bin\` SHA-256 \`${{ steps.out.outputs.clinical_bin_sha256 }}\`"
           } >> notes.md
 

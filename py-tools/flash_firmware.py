@@ -148,7 +148,7 @@ def cmd_read(args):
 
 
 def cmd_erase(args):
-    print("Erasing the application slot (0x08010000–0x0803EFFF)...")
+    print("Erasing the application slot (0x08010000–0x08034FFF)...")
     print()
     with STM32DFU() as dfu:
         dfu.connect(serial=args.serial)

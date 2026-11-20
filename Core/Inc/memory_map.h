@@ -14,11 +14,20 @@
   *   - SBSFU/App/Inc/sfu_fwimg_regions.h                (SFU_IMG_IMAGE_OFFSET)
   *   - py-tools/ (sign_firmware.py / flash_firmware.py defaults)
   *
-  * Flash partition (128 pages x 2 KB = 256 KB):
-  *   pages 0-31    0x08000000  64 KB   bootloader (SBSFU + SE, read-only via DFU)
-  *   pages 32-125  0x08010000 188 KB   APP SLOT 1 (SBSFU header @ +0, app @ +0x400)
-  *   page  126     0x0803F000   2 KB   anti-rollback version log (not DFU writable)
-  *   page  127     0x0803F800   2 KB   user config (app-owned, not DFU writable)
+  * Flash layout (2 KB pages). The same in the application's memory_map.h
+  * (openlifu-transmitter-fw): change both together.
+  *
+  *   pages   0- 31  0x08000000  secure bootloader (64 KB)
+  *   pages  32-105  0x08010000  application slot (148 KB): signed header, then
+  *                              the image at +0x400
+  *   pages 106-125  0x08035000  presets (40 KB): 10 slots of 4 KB (two
+  *                              pages), preset N at 0x08035000 + N x 0x1000
+  *   page      126  0x0803F000  the bootloader's anti-rollback version log
+  *   page      127  0x0803F800  runtime config (the application's lifu_config.h)
+  *
+  * Only the slot is DFU writable. The presets, the anti-rollback log and the
+  * runtime config sit outside it, so slot verification ignores them and a
+  * firmware update never erases them.
   ******************************************************************************
   */
 
@@ -42,13 +51,23 @@ extern "C" {
 #define MEM_BOOTLOADER_SIZE      0x00010000UL   /* 64 KB */
 #define MEM_BOOTLOADER_END       (MEM_BOOTLOADER_BASE + MEM_BOOTLOADER_SIZE)
 
-/* Application slot 1 (SBSFU active slot), pages 32-125 ----------------------
+/* Application slot 1 (SBSFU active slot), pages 32-105 ----------------------
  * Signed image header (SFU1, 0x140 bytes) at slot base; firmware body starts
  * at slot base + MEM_APP_IMAGE_OFFSET. The application must be linked at
  * MEM_APP_RUN_ADDRESS with its vector table there (VTOR). */
 #define MEM_SLOT1_BASE           0x08010000UL
-#define MEM_SLOT1_SIZE           0x0002F000UL   /* 188 KB */
+#define MEM_SLOT1_SIZE           0x00025000UL   /* 148 KB */
 #define MEM_SLOT1_END            (MEM_SLOT1_BASE + MEM_SLOT1_SIZE)  /* exclusive */
+
+/* Presets, pages 106-125 ----------------------------------------------------
+ * The application's preset store. Outside the slot: not DFU writable, and
+ * not part of slot verification. */
+#define MEM_PRESET_BASE          0x08035000UL
+#define MEM_PRESET_SIZE          0x0000A000UL   /* 40 KB */
+#define MEM_PRESET_END           (MEM_PRESET_BASE + MEM_PRESET_SIZE)  /* exclusive */
+#define MEM_PRESET_SLOT_SIZE     0x00001000UL   /* 4 KB: two pages */
+#define MEM_PRESET_SLOT_COUNT    10U
+#define MEM_PRESET_SLOT_BASE(n)  (MEM_PRESET_BASE + ((uint32_t)(n) * MEM_PRESET_SLOT_SIZE))
 
 /* Anti-rollback version log, page 126 ---------------------------------------
  * Append-only log of accepted firmware versions (see SBSFU/Target/Src/
@@ -59,9 +78,17 @@ extern "C" {
 #define MEM_APP_IMAGE_OFFSET     0x00000400UL
 #define MEM_APP_RUN_ADDRESS      (MEM_SLOT1_BASE + MEM_APP_IMAGE_OFFSET)
 
-/* User configuration page (application-owned), page 127 ---------------------*/
-#define MEM_USER_CONFIG_BASE     0x0803F800UL
-#define MEM_USER_CONFIG_SIZE     MEM_PAGE_SIZE
+/* Runtime config (application-owned: lifu_config.h), page 127 --------------*/
+#define MEM_APP_CONFIG_BASE      0x0803F800UL
+#define MEM_APP_CONFIG_SIZE      MEM_PAGE_SIZE
+
+_Static_assert(MEM_SLOT1_END == MEM_PRESET_BASE, "the presets sit right above the slot");
+_Static_assert(MEM_PRESET_SLOT_COUNT * MEM_PRESET_SLOT_SIZE == MEM_PRESET_SIZE,
+               "the preset slots fill the preset pages exactly");
+_Static_assert(MEM_PRESET_END == MEM_ANTIROLLBACK_BASE, "then the anti-rollback log");
+_Static_assert(MEM_ANTIROLLBACK_BASE + MEM_ANTIROLLBACK_SIZE == MEM_APP_CONFIG_BASE,
+               "then the runtime config");
+_Static_assert(MEM_APP_CONFIG_BASE + MEM_APP_CONFIG_SIZE == MEM_FLASH_END, "which is the last page");
 
 /* USB DFU writable window: exactly the application slot ---------------------*/
 #define MEM_DFU_WRITABLE_BASE    MEM_SLOT1_BASE
@@ -71,7 +98,7 @@ extern "C" {
 #define MEM_SRAM1_BASE           0x20000000UL
 #define MEM_SRAM1_SIZE           0x0000C000UL   /* 48 KB */
 #define MEM_SRAM2_BASE           0x10000000UL
-#define MEM_SRAM2_SIZE           0x00004000UL   /* 16 KB */
+#define MEM_SRAM2_SIZE           0x0000A000UL   /* 40 KB */
 
 #ifdef __cplusplus
 }
