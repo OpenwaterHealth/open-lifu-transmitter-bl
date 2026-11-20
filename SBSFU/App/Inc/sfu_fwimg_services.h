@@ -78,6 +78,11 @@ SFU_ErrorStatus SFU_IMG_VerifyActiveImgMetadata(uint32_t SlotNumber);
 SFU_ErrorStatus SFU_IMG_VerifyActiveImg(uint32_t SlotNumber);
 SFU_ErrorStatus SFU_IMG_VerifyActiveSlot(uint32_t SlotNumber);
 SFU_ErrorStatus SFU_IMG_VerifyEmptyActiveSlot(uint32_t SlotNumber);
+/* A signed preset (Core/Inc/dfu_preset.h). The header: PRS1 magic and its
+ * signature (the Secure Engine's ECDSA check, ~1.5 s, interrupts masked). The
+ * blob: its SHA-256 against the FwTag of a header that already verified. */
+SFU_ErrorStatus SFU_IMG_VerifyPresetHeader(const uint8_t *pHeader, uint32_t Len);
+SFU_ErrorStatus SFU_IMG_VerifyPresetBody(const uint8_t *pHeader, uint32_t Len, uint32_t BodyAddr);
 SFU_ErrorStatus SFU_IMG_LaunchActiveImg(uint32_t SlotNumber);
 uint16_t SFU_IMG_GetActiveFwVersion(uint32_t SlotNumber);
 SFU_ErrorStatus SFU_IMG_DetectFW(uint32_t SlotNumber);

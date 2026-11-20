@@ -702,6 +702,71 @@ SFU_ErrorStatus SFU_IMG_VerifyActiveSlot(uint32_t SlotNumber)
   return (VerifySlot((uint8_t *) SlotStartAdd[SlotNumber], SLOT_SIZE(SlotNumber), fw_image_header_validated.FwSize));
 }
 
+/* A word-aligned copy of a preset header (not secret), if it carries the PRS1
+ * magic and a blob size; NULL otherwise. */
+static SE_FwRawHeaderTypeDef *preset_candidate(const uint8_t *pHeader, uint32_t Len)
+{
+  static SE_FwRawHeaderTypeDef candidate;
+
+  if ((pHeader == NULL) || (Len < sizeof(SE_FwRawHeaderTypeDef)))
+  {
+    return NULL;
+  }
+  (void) memcpy(&candidate, pHeader, sizeof(candidate));
+  if ((memcmp(candidate.SFUMagic, SFUM_PRESET, strlen(SFUM_PRESET)) != 0) || (candidate.FwSize == 0U))
+  {
+    return NULL;
+  }
+  return &candidate;
+}
+
+/**
+  * @brief  Verifies a signed preset's header (Core/Inc/dfu_preset.h).
+  * @note   The header has the SFU1 layout with the "PRS1" magic, and is signed
+  *         with this bootloader's key by the same routine as a firmware header
+  *         (the Secure Engine maps PRS1 to the SLOT_ACTIVE_1 key). Its Reserved
+  *         bytes carry the preset's provenance (diathermy commit, context), so
+  *         the firmware header's Reserved-is-zero rule does not apply.
+  * @param  pHeader  the 320-byte header
+  * @param  Len      bytes at pHeader
+  * @retval SFU_SUCCESS if it verifies, SFU_ERROR otherwise.
+  */
+SFU_ErrorStatus SFU_IMG_VerifyPresetHeader(const uint8_t *pHeader, uint32_t Len)
+{
+  SE_StatusTypeDef se_status = SE_KO;
+  SE_FwRawHeaderTypeDef *p_hdr = preset_candidate(pHeader, Len);
+
+  if ((p_hdr == NULL) || (SE_VerifyHeaderSignature(&se_status, p_hdr) != SE_SUCCESS))
+  {
+    return SFU_ERROR;
+  }
+  return SFU_SUCCESS;
+}
+
+/**
+  * @brief  Verifies a signed preset's blob: the FwSize bytes at BodyAddr hashed
+  *         against the header's FwTag (SLOT_INACTIVE: no tag cached).
+  * @note   pHeader must be a header that already passed
+  *         SFU_IMG_VerifyPresetHeader(): its FwTag is trusted from there.
+  * @retval SFU_SUCCESS if the blob matches, SFU_ERROR otherwise.
+  */
+SFU_ErrorStatus SFU_IMG_VerifyPresetBody(const uint8_t *pHeader, uint32_t Len, uint32_t BodyAddr)
+{
+  SE_StatusTypeDef se_status = SE_KO;
+  SE_Ex_PayloadDescTypeDef payload;
+  SE_FwRawHeaderTypeDef *p_hdr = preset_candidate(pHeader, Len);
+
+  if ((p_hdr == NULL) || (BodyAddr == 0U))
+  {
+    return SFU_ERROR;
+  }
+  payload.pPayload[0]    = BodyAddr;
+  payload.PayloadSize[0] = p_hdr->FwSize;
+  payload.pPayload[1]    = 0U;
+  payload.PayloadSize[1] = 0U;
+  return VerifyFwSignatureScatter(&se_status, SLOT_INACTIVE, p_hdr, &payload, SE_FW_IMAGE_COMPLETE);
+}
+
 /**
   * @brief Verifies if no malicious code in active slot.
   * @param  SlotNumber index of the slot in the list

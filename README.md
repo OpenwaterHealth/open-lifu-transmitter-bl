@@ -56,12 +56,15 @@ Single source of truth: [`Core/Inc/memory_map.h`](Core/Inc/memory_map.h).
 |-------|------|-------|--------|------------|
 | `0x08000000`–`0x0800FFFF` | 64 K | 0–31 | Bootloader (SBSFU + Secure Engine) | read-only (immutable) |
 | `0x08010000`–`0x08034FFF` | 148 K | 32–105 | App slot 1 — header `@+0`, app `@+0x400` | **writable (signed only)** |
-| `0x08035000`–`0x0803EFFF` | 40 K | 106–125 | Presets | read-only (application-managed) |
+| `0x08035000`–`0x0803EFFF` | 40 K | 106–125 | Preset slots (10 × 4 K) | **writable (signed `PRS1` preset only)** |
 | `0x0803F000`–`0x0803F7FF` | 2 K | 126 | Anti-rollback version floor | read-only (bootloader-managed) |
 | `0x0803F800`–`0x0803FFFF` | 2 K | 127 | Runtime config | read-only (application-managed) |
 
-The DFU writable window is clamped to the app slot, so **all** DFU-writable flash is covered by
-secure-boot verification. DfuSe descriptor: `32*002Ka,74*002Kg,22*002Ka`.
+Firmware writes are clamped to the app slot, so all firmware that DFU writes is covered by secure-boot
+verification. A preset slot takes only a signed preset whose `PRS1` header was staged at
+`0xFFFFFF20` and verified first (`Core/Inc/dfu_preset.h`). DfuSe descriptor:
+`32*002Ka,74*002Kg,20*002Kg,02*002Ka`. The layout and the capability word are also published in the
+info block at `0x080001E0` (`SBSFU/Target/Src/bl_info.c`).
 
 ## Repository layout
 

@@ -27,6 +27,7 @@
 #include "common.h"
 #include "memory_map.h"
 #include "dfu_guard.h" /* pre-erase header check (shared with the USB DFU) */
+#include "dfu_preset.h" /* signed preset slots (shared with the USB DFU) */
 #include "utils.h"    /* delay_ms (tick-free; the HAL TIM6 tick may be stalled
                        * on the DFU path, so HAL_Delay must not be used here) */
 #include <string.h>
@@ -141,6 +142,18 @@ static uint8_t is_writable(uint32_t addr)
  * clears the failsafe boot counter (RTC->BKP6R). */
 static uint8_t do_erase(uint32_t addr)
 {
+    /* A preset slot: erased now, and only once a signed preset header was
+     * staged (dfu_preset.h). */
+    if (DFU_Preset_InRegion(addr) != 0U)
+    {
+        switch (DFU_Preset_EraseSlot(addr))
+        {
+            case DFU_PRESET_OK:      return I2C_DFU_STATUS_OK;
+            case DFU_PRESET_REFUSED: return I2C_DFU_STATUS_REJECTED;
+            default:                 return I2C_DFU_STATUS_FLASH_ERR;
+        }
+    }
+
     if (addr == ERASE_ALL_ADDR)
     {
         for (uint32_t a = DFU_APP_START; a < DFU_APP_END; a += FLASH_PAGE_SIZE)
@@ -162,6 +175,35 @@ static uint8_t do_erase(uint32_t addr)
     }
     return (DFU_Guard_RequestErase(page_addr) == DFU_GUARD_OK)
            ? I2C_DFU_STATUS_OK : I2C_DFU_STATUS_FLASH_ERR;
+}
+
+/* Signed preset: stage its header, or write the slot it was bound to. The
+ * header's signature check (~1.5 s) and the completing block's hash check run
+ * in the Secure Engine with interrupts masked, so the slave goes off the bus
+ * meanwhile, as for a firmware header: listening, it would hold SCL low on
+ * the master's next poll. */
+static uint8_t do_preset_write(const uint8_t *src, uint32_t dest, uint32_t len)
+{
+    DFU_PresetStatus st;
+    uint8_t offline = ((dest == DFU_PRESET_STAGE_VIRT_ADDR) ||
+                       (DFU_Preset_Completes(dest, len) != 0U)) ? 1U : 0U;
+
+    if (offline != 0U) { i2c_slave_offline(); }
+    if (dest == DFU_PRESET_STAGE_VIRT_ADDR)
+    {
+        st = DFU_Preset_Stage(src, len);
+    }
+    else
+    {
+        st = DFU_Preset_Write(src, dest, len);
+    }
+    if (offline != 0U) { i2c_slave_online(); }
+    switch (st)
+    {
+        case DFU_PRESET_OK:      return I2C_DFU_STATUS_OK;
+        case DFU_PRESET_REFUSED: return I2C_DFU_STATUS_REJECTED;
+        default:                 return I2C_DFU_STATUS_FLASH_ERR;
+    }
 }
 
 static uint8_t do_write(const uint8_t *src, uint32_t dest, uint32_t len)
@@ -215,6 +257,16 @@ static uint8_t do_write(const uint8_t *src, uint32_t dest, uint32_t len)
         }
     }
     return I2C_DFU_STATUS_OK;
+}
+
+/* DNLOAD: a preset (its staged header, or its slot), else firmware in the slot. */
+static uint8_t do_dnload(const uint8_t *src, uint32_t dest, uint32_t len)
+{
+    if ((dest == DFU_PRESET_STAGE_VIRT_ADDR) || (DFU_Preset_InRegion(dest) != 0U))
+    {
+        return do_preset_write(src, dest, len);
+    }
+    return do_write(src, dest, len);
 }
 
 /* MANIFEST queued by process_inline() only when an accepted download left
@@ -297,7 +349,7 @@ static void process_command(void)
 
             g_dfu_state = I2C_DFU_STATE_DNBUSY;
             HAL_FLASH_Unlock();
-            result = do_write(&g_rx_buf[DATA_OFFSET], addr, (uint32_t)len);
+            result = do_dnload(&g_rx_buf[DATA_OFFSET], addr, (uint32_t)len);
             HAL_FLASH_Lock();
             g_dfu_state = (result == I2C_DFU_STATUS_OK)
                           ? I2C_DFU_STATE_DNLOAD_IDLE
@@ -399,6 +451,16 @@ static void process_inline(uint8_t cmd)
             break;
         }
 
+        case I2C_DFU_CMD_GETCAPS:
+        {
+            g_tx_buf[0]   = I2C_DFU_STATUS_OK;
+            g_tx_buf[1]   = g_dfu_state;
+            DFU_Preset_Caps(&g_tx_buf[2]);
+            g_tx_len      = (uint16_t)(2U + DFU_CAPS_LEN);
+            g_last_status = I2C_DFU_STATUS_OK;
+            break;
+        }
+
         case I2C_DFU_CMD_MANIFEST:
         {
             /* Tail pages still to erase: hand the work to the main loop and
@@ -469,6 +531,7 @@ void I2C_DFU_Init(I2C_HandleTypeDef *hi2c)
     g_rx_len      = 0U;
     g_rx_step     = 0;
     DFU_Guard_StartSession();   /* every download starts with an unchecked header */
+    DFU_Preset_StartSession();  /* and nothing staged for the preset slots */
 
     /* Default transmit response: OK + IDLE */
     g_tx_buf[0] = I2C_DFU_STATUS_OK;

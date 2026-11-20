@@ -258,6 +258,12 @@ static void SE_CRYPTO_ReadKey_Pub(SE_FwRawHeaderTypeDef *pxSE_Metadata, uint8_t 
   {
     SE_ReadKey_1_Pub(paSE_PubKey);
   }
+  /* A signed preset (PRS1) is signed with the same key as the SLOT_ACTIVE_1
+   * firmware; its magic keeps a preset header from passing as a firmware one. */
+  else if (memcmp(pxSE_Metadata->SFUMagic, SFUM_PRESET, strlen(SFUM_PRESET)) == 0)
+  {
+    SE_ReadKey_1_Pub(paSE_PubKey);
+  }
 #if (SFU_NB_MAX_ACTIVE_IMAGE > 1U)
   else if (memcmp(pxSE_Metadata->SFUMagic, SFUM_2, strlen(SFUM_2)) == 0)
   {

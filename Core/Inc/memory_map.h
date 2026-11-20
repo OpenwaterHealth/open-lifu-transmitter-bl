@@ -68,6 +68,11 @@ extern "C" {
 #define MEM_PRESET_SLOT_SIZE     0x00001000UL   /* 4 KB: two pages */
 #define MEM_PRESET_SLOT_COUNT    10U
 #define MEM_PRESET_SLOT_BASE(n)  (MEM_PRESET_BASE + ((uint32_t)(n) * MEM_PRESET_SLOT_SIZE))
+/* A slot holds one signed preset: its PRS1 header (the SFU1 header layout,
+ * sizeof(SE_FwRawHeaderTypeDef)), then the preset blob. DFU writes a slot only
+ * once that header verified against this bootloader's key (dfu_preset.c). */
+#define MEM_PRESET_BODY_OFFSET   0x00000140UL
+#define MEM_PRESET_BODY_MAX      (MEM_PRESET_SLOT_SIZE - MEM_PRESET_BODY_OFFSET)
 
 /* Anti-rollback version log, page 126 ---------------------------------------
  * Append-only log of accepted firmware versions (see SBSFU/Target/Src/
@@ -93,6 +98,34 @@ _Static_assert(MEM_APP_CONFIG_BASE + MEM_APP_CONFIG_SIZE == MEM_FLASH_END, "whic
 /* USB DFU writable window: exactly the application slot ---------------------*/
 #define MEM_DFU_WRITABLE_BASE    MEM_SLOT1_BASE
 #define MEM_DFU_WRITABLE_END     MEM_SLOT1_END  /* exclusive */
+
+/* Bootloader info block ------------------------------------------------------
+ * 32 bytes at a fixed address at the end of the vector-table area (bl_info.c,
+ * STM32L443xx_FLASH.ld), where the application reads this layout. Bootloaders
+ * before 1.1.0-rc.1 have only fill bytes here, so the magic tells them apart:
+ * the application stores presets only under a bootloader that has one. */
+#define BL_INFO_ADDRESS          0x080001E0UL
+#define BL_INFO_MAGIC            0x4942574FUL   /* 'OWBI' */
+#define BL_INFO_LAYOUT           1U
+
+/* DFU capability word: served behind "OWC1" at the USB DFU virtual capability
+ * address and by the I2C GETCAPS command, and copied into the info block. */
+#define BL_CAP_VERIFY_BEFORE_ERASE   0x00000001UL  /* the SFU1 header is checked before any erase */
+#define BL_CAP_SIGNED_PRESET_WRITE   0x00000002UL  /* preset slots take signed PRS1 presets */
+#define BL_CAPS                      (BL_CAP_VERIFY_BEFORE_ERASE | BL_CAP_SIGNED_PRESET_WRITE)
+
+typedef struct
+{
+  uint32_t magic;          /* BL_INFO_MAGIC */
+  uint16_t layout;         /* BL_INFO_LAYOUT */
+  uint16_t reserved;
+  uint32_t slot_base;
+  uint32_t slot_end;       /* exclusive */
+  uint32_t preset_base;
+  uint32_t preset_size;    /* MEM_PRESET_SLOT_COUNT slots of MEM_PRESET_SLOT_SIZE */
+  uint32_t caps;           /* BL_CAPS */
+  uint32_t reserved2;
+} bl_info_t;               /* 32 bytes */
 
 /* SRAM ----------------------------------------------------------------------*/
 #define MEM_SRAM1_BASE           0x20000000UL
