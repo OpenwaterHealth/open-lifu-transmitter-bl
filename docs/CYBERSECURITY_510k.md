@@ -106,24 +106,27 @@ scripts, `usbd_dfu_if.c`, and the `py-tools` signing/flash defaults):
 Addr range              Size   Pages   Region                Access control
 -----------------------------------------------------------------------------------
 0x08000000-0x0800FFFF   64K    0-31    BOOTLOADER (SBSFU+SE)  read-only via DFU (immutable)
-0x08010000-0x0803EFFF   188K   32-125  APP SLOT 1 (active)    updatable (signed) — DFU writable window
+0x08010000-0x08034FFF   148K   32-105  APP SLOT 1 (active)    updatable (signed) — DFU writable window
                                         · SFU1 header @ 0x08010000 (0x140 bytes)
                                         · app body/vectors @ 0x08010400 (VTOR)
+0x08035000-0x0803EFFF   40K    106-125 PRESETS                read-only via DFU (application-managed)
 0x0803F000-0x0803F7FF   2K     126     ANTI-ROLLBACK FLOOR    read-only via DFU (bootloader-managed)
-0x0803F800-0x0803FFFF   2K     127     USER CONFIG            read-only via DFU (application-managed)
+0x0803F800-0x0803FFFF   2K     127     RUNTIME CONFIG         read-only via DFU (application-managed)
 ```
 
 The DFU update interface (USB **and** I²C) restricts erase/write to the **active application slot
-only** (`0x08010000`–`0x0803EFFF`, the SBSFU `SLOT_ACTIVE_1` extent). The DFU writable window
+only** (`0x08010000`–`0x08034FFF`, the SBSFU `SLOT_ACTIVE_1` extent). The DFU writable window
 (`MEM_DFU_WRITABLE_BASE`..`MEM_DFU_WRITABLE_END`) is deliberately clamped to the slot so that **all
 DFU-writable flash is covered by secure-boot slot verification** — no writable region escapes the
-verification check. The bootloader pages (0–31), the anti-rollback floor page (126), and the
-user-config page (127) are **not erasable or writable** through either update interface. The
+verification check. The bootloader pages (0–31), the preset pages (106–125), the anti-rollback
+floor page (126), and the runtime-config page (127) are **not erasable or writable** through either
+update interface. The
 anti-rollback floor page is written only by the bootloader during verified boot (§5.6); the
 user-config page is owned by the application.
 
-The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,94*002Kg,02*002Ka` (32 read-only
-bootloader pages, 94 read/write/erasable slot pages, 2 read-only pages for the floor + user config).
+The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,74*002Kg,22*002Ka` (32 read-only
+bootloader pages, 74 read/write/erasable slot pages, 22 read-only pages for the presets, the floor and
+the runtime config).
 
 ### 2.4 Cryptographic scheme
 `SECBOOT_ECCDSA_WITH_AES128_CBC_SHA256`:

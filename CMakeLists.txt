@@ -50,13 +50,15 @@ endif()
 
 string(TIMESTAMP FW_BUILD_TIME_UTC "%Y-%m-%d %H:%M:%S UTC" UTC)
 
-# Bootloader variant (see app_sfu.h and the target settings below). Declared here so
-# the version string can carry it: FW_VERSION (DFU version read, USB product string
-# "OW DFU <version>") is the git describe plus "+research" or "+clinical" (semver
-# build metadata, as the firmware's "+fda"), so the host can tell the two apart.
+# Bootloader variant (see app_sfu.h and the target settings below). FW_VERSION (DFU
+# version read over USB and I2C, USB product string "OW DFU <version>") is the
+# release, the same for both variants: which one a unit runs is told by which key its
+# firmware is signed with (openlifu-sdk firmware_domain(), OW_CMD_SIGCHK), since each
+# variant boots only images signed with its own key. The application's version
+# carries no variant either. Same as open-lifu-console-bl.
 set(LIFU_BL_VARIANT "research" CACHE STRING "Bootloader variant: research or clinical")
 set_property(CACHE LIFU_BL_VARIANT PROPERTY STRINGS research clinical)
-set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}+${LIFU_BL_VARIANT}")
+set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}")
 
 message(STATUS "FW version   : ${FW_VERSION_STRING}")
 message(STATUS "FW git sha   : ${FW_GIT_SHA}")
