@@ -109,24 +109,27 @@ Addr range              Size   Pages   Region                Access control
 0x08010000-0x08034FFF   148K   32-105  APP SLOT 1 (active)    updatable (signed) — DFU writable window
                                         · SFU1 header @ 0x08010000 (0x140 bytes)
                                         · app body/vectors @ 0x08010400 (VTOR)
-0x08035000-0x0803EFFF   40K    106-125 PRESETS                read-only via DFU (application-managed)
+0x08035000-0x0803EFFF   40K    106-125 PRESET SLOTS (10x4K)   updatable (signed PRS1 preset) via DFU
 0x0803F000-0x0803F7FF   2K     126     ANTI-ROLLBACK FLOOR    read-only via DFU (bootloader-managed)
 0x0803F800-0x0803FFFF   2K     127     RUNTIME CONFIG         read-only via DFU (application-managed)
 ```
 
-The DFU update interface (USB **and** I²C) restricts erase/write to the **active application slot
-only** (`0x08010000`–`0x08034FFF`, the SBSFU `SLOT_ACTIVE_1` extent). The DFU writable window
-(`MEM_DFU_WRITABLE_BASE`..`MEM_DFU_WRITABLE_END`) is deliberately clamped to the slot so that **all
-DFU-writable flash is covered by secure-boot slot verification** — no writable region escapes the
-verification check. The bootloader pages (0–31), the preset pages (106–125), the anti-rollback
-floor page (126), and the runtime-config page (127) are **not erasable or writable** through either
-update interface. The
-anti-rollback floor page is written only by the bootloader during verified boot (§5.6); the
-user-config page is owned by the application.
+The DFU update interface (USB **and** I²C) restricts firmware erase/write to the **active
+application slot** (`0x08010000`–`0x08034FFF`, the SBSFU `SLOT_ACTIVE_1` extent), so all firmware it
+writes is covered by secure-boot slot verification. The only other region it writes is the **preset
+slots** (10 slots of 4 KB, `0x08035000 + N × 0x1000`), and each one only with a **signed preset**
+whose `PRS1` header verified first (§5.4). The bootloader pages (0–31), the anti-rollback floor page
+(126), and the runtime-config page (127) are **not erasable or writable** through either update
+interface. The anti-rollback floor page is written only by the bootloader during verified boot
+(§5.6); the runtime-config page is owned by the application.
 
-The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,74*002Kg,22*002Ka` (32 read-only
-bootloader pages, 74 read/write/erasable slot pages, 22 read-only pages for the presets, the floor and
+The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,74*002Kg,20*002Kg,02*002Ka` (32
+read-only bootloader pages, 74 slot pages, 20 preset-slot pages, 2 read-only pages for the floor and
 the runtime config).
+
+The bootloader publishes this layout in a 32-byte **info block** at `0x080001E0` (end of the vector
+area; `bl_info.c`): magic `OWBI`, layout, slot range, preset range, capability word. The application
+stores presets only under a bootloader that has one.
 
 ### 2.4 Cryptographic scheme
 `SECBOOT_ECCDSA_WITH_AES128_CBC_SHA256`:
@@ -273,8 +276,21 @@ the next reset before it can execute.
   address **0x72**, runtime-reassignable — see §5.7). The upstream master relays the download as a
   sequence of I²C transactions (write-block / erase / manifest / reset). Byte-for-byte the same signed
   image is written to the slot.
-- Both interfaces restrict writes/erases to the **application slot**; the bootloader, anti-rollback,
-  and user-config pages are rejected (out-of-window addresses return an error).
+- Both interfaces restrict firmware writes/erases to the **application slot**; the bootloader,
+  anti-rollback, and runtime-config pages are rejected (out-of-window addresses return an error).
+- **Signed preset slots (both interfaces, `Core/Src/dfu_preset.c`).** A preset slot is written only
+  as: (1) **stage** the preset's 320-byte `PRS1` header at the virtual address `0xFFFFFF20` — checked
+  for the `PRS1` magic, a blob size that fits a slot, and its **ECDSA signature through the Secure
+  Engine** (the same key as the firmware: the Secure Engine maps `PRS1` to the `SLOT_ACTIVE_1` key;
+  the distinct magic keeps a preset header from passing as a firmware header and vice versa); a refused
+  header changes nothing; (2) **erase** one slot, which binds the staged header to it; (3) **write**
+  the slot — the header bytes must be the staged ones and everything past the blob `0xFF`; the block
+  that completes the blob checks the header in flash against the staged one and the blob's SHA-256
+  against it, and **erases the slot** on a mismatch. One stage covers one slot. Slot verification at
+  boot ignores the preset slots (they are outside the slot), and a firmware update never erases them.
+- **Capabilities.** The capability word (`OWC1` + bits: 1 = header check before erase, 2 = signed
+  preset slots) is served at the USB virtual upload address `0xFFFFFF18` and by the I²C `GETCAPS`
+  command (`0x07`), and copied into the info block (§2.3).
 - **Header check before erase (both interfaces, `Core/Src/dfu_guard.c`).** There is one slot, so a
   download must erase the installed image before the new one is complete. Erase requests are
   therefore recorded, not executed: the first block a host writes must be the signed header at the
@@ -358,7 +374,8 @@ one-wire discovery enumeration the application uses and accepts a **unique** ass
 | C-7 | Hardware protections: RDP, WRP, PCROP, DAP, MPU/SE isolation | SO-4, T-3/T-5/T-8 | §8 TC-HWPROT-* / §12 |
 | C-8 | Signed `FwVersion` + boot-time monotonic anti-rollback floor (§5.6) | SO-5, T-9 | §8 TC-ROLLBACK-* |
 | C-9 | Off-device key custody (HSM), provisioning, rotation | A3, T-10 | §8 TC-KEY-* `[[TODO procedure]]` |
-| C-10 | Protected user-config page (no DFU erase/write) | data integrity | §8 TC-USERCFG-* |
+| C-10 | Protected runtime-config page (no DFU erase/write) | data integrity | §8 TC-USERCFG-* |
+| C-12 | Preset slots written only with a staged, signature-verified `PRS1` preset; blob hash checked on completion, slot erased on mismatch | SO-1, SO-2, T-1/T-2 | §8 TC-PRESET-* |
 | C-11 | Relay is transport-only; per-board Root of Trust independent (§4.2, §5.7) | SO-1, T-11 | §8 TC-I2CDFU-02 |
 
 ---
@@ -423,6 +440,8 @@ vulnerability testing, and penetration testing.
 | TC-DFU-09 | Upgrade and smaller-image tail (USB + I²C) | Install v+1; then a 20 KB larger image; then a normal-size image over it | **Pass** (2026-11-17): each boots, floor raised each time; pages beyond the smaller image erased (USB after manifestation, I²C on MANIFEST); SDK `program_transmitter` path unchanged |
 | TC-USERCFG-01 | DFU write/erase of user-config rejected | Target 0x0803F800 | **Pass** (outside DFU writable window) |
 | TC-FAILCLOSED-01 | No/invalid FW → safe recovery, no code exec | Empty slot | **Pass** (enters DFU; no unauthenticated execution) |
+| TC-PRESET-01 | Signed preset accepted into its slot; slots outside slot verification | Stage a `PRS1` header signed with the trusted key at `0xFFFFFF20`, erase + write one slot; reset; then a firmware update | **Pass** (2026-11-19, L443, research bench build): USB (master) and I²C (slave, through the master); slot read back identical; app boots; a USB firmware update left the slot unchanged |
+| TC-PRESET-02 | Wrong-key / tampered / unstaged preset rejected | (a) header signed with another board's key, (b) blob altered after signing, (c) slot erase or write without staging | **Pass** (2026-11-19, USB and I²C): (a) refused at staging, slot untouched; (b) completing block refused and the slot erased; (c) refused |
 | TC-IMMUT-01 | Bootloader not modifiable via update path | Hash bootloader pages 0–31 before/after a DFU write attempt to 0x08000000 | Write rejected; hash-invariance `[[TODO: capture on L443]]` |
 | TC-I2CDFU-01 | I²C-DFU install of signed image succeeds | Master relays signed image to a downstream slave over I²C; slave verifies + boots | **Pass** (verified on STM32L443, full cycle) |
 | TC-I2CDFU-02 | I²C-DFU install of unsigned/tampered image rejected by slave | Relay a tampered image over I²C | **Pass** (2026-11-17): the slave refuses the header before erasing (status 0x05; TC-DFU-04/05); relay is transport-only |

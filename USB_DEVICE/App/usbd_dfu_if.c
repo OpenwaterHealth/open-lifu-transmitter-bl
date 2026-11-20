@@ -25,6 +25,7 @@
 #include "memory_map.h"
 #include "version.h"   /* FW_VERSION (CMake-generated git describe) */
 #include "dfu_guard.h" /* pre-erase header check (shared with the I2C DFU) */
+#include "dfu_preset.h" /* signed preset slots (shared with the I2C DFU) */
 #include <string.h>
 /* USER CODE END INCLUDE */
 
@@ -93,13 +94,14 @@ static volatile uint8_t s_dfu_reset_requested = 0U;
  *   'a' = 1 = read-only,  'g' = 7 = read+erase+write.
  *   pages 0-31    bootloader (SBSFU + SE)   read-only    -> 32*002Ka
  *   pages 32-105  active app slot           r/w/erase    -> 74*002Kg
- *   pages 106-125 presets                   read-only  \
- *   page  126     anti-rollback floor log   read-only   |
- *   page  127     runtime config            read-only  / -> 22*002Ka
- * The DFU writable window is clamped to the SBSFU active slot
- * (SLOT_ACTIVE_1: 0x08010000-0x08034FFF, see Linker/mapping_fwimg.ld) so that
- * ALL DFU-writable flash is covered by secure-boot slot verification. */
-#define FLASH_DESC_STR      "@Internal Flash/0x08000000/32*002Ka,74*002Kg,22*002Ka"
+ *   pages 106-125 preset slots              r/w/erase    -> 20*002Kg
+ *   page  126     anti-rollback floor log   read-only  \
+ *   page  127     runtime config            read-only  / -> 02*002Ka
+ * The firmware window is clamped to the SBSFU active slot (SLOT_ACTIVE_1:
+ * 0x08010000-0x08034FFF, see Linker/mapping_fwimg.ld) so that all of it is
+ * covered by secure-boot slot verification. The preset slots take only a
+ * signed preset whose header was staged and verified first (dfu_preset.h). */
+#define FLASH_DESC_STR      "@Internal Flash/0x08000000/32*002Ka,74*002Kg,20*002Kg,02*002Ka"
 
 /* DFU writable window: the active application slot only. The bootloader and the
  * anti-rollback log (below APP_FLASH_BASE) and the user-config page (at/above
@@ -219,6 +221,7 @@ uint16_t MEM_If_Init_FS(void)
   /* USER CODE BEGIN 0 */
   /* New session: every download starts with an unchecked header. */
   DFU_Guard_StartSession();
+  DFU_Preset_StartSession();
   s_next_write_addr = 0U;
   return (USBD_OK);
   /* USER CODE END 0 */
@@ -244,8 +247,15 @@ uint16_t MEM_If_Erase_FS(uint32_t Add)
 {
   /* USER CODE BEGIN 2 */
 
+  /* A preset slot: erased now, and only once a signed preset header was
+   * staged (dfu_preset.h). */
+  if (DFU_Preset_InRegion(Add) != 0U)
+  {
+    return (DFU_Preset_EraseSlot(Add) == DFU_PRESET_OK) ? USBD_OK : USBD_FAIL;
+  }
+
   /* Reject erase outside the active application slot (protects the bootloader,
-   * the anti-rollback log page and the user-config page). */
+   * the anti-rollback log page and the runtime-config page). */
   if (Add < APP_FLASH_BASE || Add >= FLASH_END_ADDR)
   {
     return (USBD_FAIL);
@@ -290,6 +300,17 @@ uint16_t MEM_If_Write_FS(uint8_t *src, uint8_t *dest, uint32_t Len)
   {
     s_dfu_reset_requested = 1U;
     return (USBD_OK);
+  }
+
+  /* Signed preset: stage its header, or write the slot it was bound to. Never
+   * arms the post-manifest reboot: the host resets when it is done. */
+  if (addr == DFU_PRESET_STAGE_VIRT_ADDR)
+  {
+    return (DFU_Preset_Stage(src, Len) == DFU_PRESET_OK) ? USBD_OK : USBD_FAIL;
+  }
+  if (DFU_Preset_InRegion(addr) != 0U)
+  {
+    return (DFU_Preset_Write(src, addr, Len) == DFU_PRESET_OK) ? USBD_OK : USBD_FAIL;
   }
 
   /* Protect everything outside the active application slot */
@@ -364,21 +385,33 @@ uint8_t *MEM_If_Read_FS(uint8_t *src, uint8_t *dest, uint32_t Len)
     return dest;
   }
 
+  /* DFU "get capabilities": "OWC1" then BL_CAPS (dfu_preset.h). A bootloader
+   * without it stalls this upload. */
+  if ((uint32_t)src == DFU_CAPS_VIRT_ADDR)
+  {
+    uint8_t caps[DFU_CAPS_LEN];
+    DFU_Preset_Caps(caps);
+    memset(dest, 0, Len);
+    memcpy(dest, caps, (Len < DFU_CAPS_LEN) ? Len : DFU_CAPS_LEN);
+    return dest;
+  }
+
   /* Bound DFU UPLOAD/read to the same window as erase/write: the active
-   * application slot only. Without this, a host could point the DfuSe address
-   * pointer at any address and UPLOAD-read it, exfiltrating the bootloader and
-   * the SE key material (se_key.s AES key in the SE key region), the
-   * anti-rollback floor, the user-config page, or RAM. Reject anything outside
-   * [APP_FLASH_BASE, FLASH_END_ADDR); the read range must also fit entirely
-   * inside the window. The comparison against (FLASH_END_ADDR - addr) is written
-   * to avoid the unsigned overflow that (addr + Len) would risk. Returning NULL
-   * makes the DFU class STALL the packet and NAK the command (usbd_dfu.c). */
+   * application slot and the preset slots above it. Without this, a host could
+   * point the DfuSe address pointer at any address and UPLOAD-read it,
+   * exfiltrating the bootloader and the SE key material (se_key.s AES key in
+   * the SE key region), the anti-rollback floor, the runtime-config page, or
+   * RAM. Reject anything outside [APP_FLASH_BASE, MEM_PRESET_END); the read
+   * range must also fit entirely inside it. The comparison against
+   * (MEM_PRESET_END - addr) is written to avoid the unsigned overflow that
+   * (addr + Len) would risk. Returning NULL makes the DFU class STALL the packet
+   * and NAK the command (usbd_dfu.c). */
   {
     uint32_t addr = (uint32_t)src;
 
     if ((addr < APP_FLASH_BASE) ||
-        (addr >= FLASH_END_ADDR) ||
-        (Len  > (FLASH_END_ADDR - addr)))
+        (addr >= MEM_PRESET_END) ||
+        (Len  > (MEM_PRESET_END - addr)))
     {
       return (NULL);
     }
@@ -412,7 +445,15 @@ uint16_t MEM_If_GetStatus_FS(uint32_t Add, uint8_t Cmd, uint8_t *buffer)
       /* Add is the DfuSe address pointer, not the block address: the next
        * block lands where the previous write stopped. */
       uint32_t next = (s_next_write_addr != 0U) ? s_next_write_addr : Add;
-      if (DFU_Guard_HeaderAccepted() == 0U)
+      if (Add == DFU_PRESET_STAGE_VIRT_ADDR)
+      {
+        timeout_ms = 2500U;  /* preset header: ECDSA check (~1.5 s) */
+      }
+      else if ((DFU_Preset_Staged() != 0U) && (DFU_Preset_InRegion(Add) != 0U))
+      {
+        timeout_ms = 40U;    /* preset block; the last one also hashes the blob */
+      }
+      else if (DFU_Guard_HeaderAccepted() == 0U)
       {
         timeout_ms = 2500U;  /* header block: ECDSA check (~1.5 s measured) + erase + program */
       }
@@ -432,8 +473,15 @@ uint16_t MEM_If_GetStatus_FS(uint32_t Add, uint8_t Cmd, uint8_t *buffer)
     }
 
     case DFU_MEDIA_ERASE:
-      /* Deferred (nothing erased) until a header is accepted. */
-      timeout_ms = (DFU_Guard_HeaderAccepted() == 0U) ? 10U : 50U;
+      if (DFU_Preset_InRegion(Add) != 0U)
+      {
+        timeout_ms = 70U;    /* a preset slot: two pages (~25 ms each) */
+      }
+      else
+      {
+        /* Deferred (nothing erased) until a header is accepted. */
+        timeout_ms = (DFU_Guard_HeaderAccepted() == 0U) ? 10U : 50U;
+      }
       break;
 
     default:
