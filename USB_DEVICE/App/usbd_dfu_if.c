@@ -93,22 +93,22 @@ static volatile uint8_t s_dfu_reset_requested = 0U;
  * DfuSe sector type letters encode access (bit0=read, bit1=erase, bit2=write):
  *   'a' = 1 = read-only,  'g' = 7 = read+erase+write.
  *   pages 0-31    bootloader (SBSFU + SE)   read-only    -> 32*002Ka
- *   pages 32-105  active app slot           r/w/erase    -> 74*002Kg
- *   pages 106-125 preset slots              r/w/erase    -> 20*002Kg
+ *   pages 32-95   active app slot           r/w/erase    -> 64*002Kg
+ *   pages 96-125  preset slots              r/w/erase    -> 30*002Kg
  *   page  126     anti-rollback floor log   read-only  \
  *   page  127     runtime config            read-only  / -> 02*002Ka
  * The firmware window is clamped to the SBSFU active slot (SLOT_ACTIVE_1:
- * 0x08010000-0x08034FFF, see Linker/mapping_fwimg.ld) so that all of it is
+ * 0x08010000-0x0802FFFF, see Linker/mapping_fwimg.ld) so that all of it is
  * covered by secure-boot slot verification. The preset slots take only a
  * signed preset whose header was staged and verified first (dfu_preset.h). */
-#define FLASH_DESC_STR      "@Internal Flash/0x08000000/32*002Ka,74*002Kg,20*002Kg,02*002Ka"
+#define FLASH_DESC_STR      "@Internal Flash/0x08000000/32*002Ka,64*002Kg,30*002Kg,02*002Ka"
 
 /* DFU writable window: the active application slot only. The bootloader and the
  * anti-rollback log (below APP_FLASH_BASE) and the user-config page (at/above
  * FLASH_END_ADDR) are excluded and cannot be erased or written over DFU.
  * FLASH_END_ADDR is the active-slot end + 1 (exclusive). */
 #define APP_FLASH_BASE      MEM_DFU_WRITABLE_BASE   /* 0x08010000 (active slot start) */
-#define FLASH_END_ADDR      MEM_DFU_WRITABLE_END    /* 0x0803F000 (active slot end + 1) */
+#define FLASH_END_ADDR      MEM_DFU_WRITABLE_END    /* 0x08030000 (active slot end + 1) */
 #define DFU_PAGE_SIZE       MEM_PAGE_SIZE           /* 2KB erase page */
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
