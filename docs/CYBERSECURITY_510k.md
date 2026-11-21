@@ -106,25 +106,25 @@ scripts, `usbd_dfu_if.c`, and the `py-tools` signing/flash defaults):
 Addr range              Size   Pages   Region                Access control
 -----------------------------------------------------------------------------------
 0x08000000-0x0800FFFF   64K    0-31    BOOTLOADER (SBSFU+SE)  read-only via DFU (immutable)
-0x08010000-0x08034FFF   148K   32-105  APP SLOT 1 (active)    updatable (signed) — DFU writable window
+0x08010000-0x0802FFFF   128K   32-95   APP SLOT 1 (active)    updatable (signed) — DFU writable window
                                         · SFU1 header @ 0x08010000 (0x140 bytes)
                                         · app body/vectors @ 0x08010400 (VTOR)
-0x08035000-0x0803EFFF   40K    106-125 PRESET SLOTS (10x4K)   updatable (signed PRS1 preset) via DFU
+0x08030000-0x0803EFFF   60K    96-125  PRESET SLOTS (15x4K)   updatable (signed PRS1 preset) via DFU
 0x0803F000-0x0803F7FF   2K     126     ANTI-ROLLBACK FLOOR    read-only via DFU (bootloader-managed)
 0x0803F800-0x0803FFFF   2K     127     RUNTIME CONFIG         read-only via DFU (application-managed)
 ```
 
 The DFU update interface (USB **and** I²C) restricts firmware erase/write to the **active
-application slot** (`0x08010000`–`0x08034FFF`, the SBSFU `SLOT_ACTIVE_1` extent), so all firmware it
+application slot** (`0x08010000`–`0x0802FFFF`, the SBSFU `SLOT_ACTIVE_1` extent), so all firmware it
 writes is covered by secure-boot slot verification. The only other region it writes is the **preset
-slots** (10 slots of 4 KB, `0x08035000 + N × 0x1000`), and each one only with a **signed preset**
+slots** (15 slots of 4 KB, `0x08030000 + N × 0x1000`), and each one only with a **signed preset**
 whose `PRS1` header verified first (§5.4). The bootloader pages (0–31), the anti-rollback floor page
 (126), and the runtime-config page (127) are **not erasable or writable** through either update
 interface. The anti-rollback floor page is written only by the bootloader during verified boot
 (§5.6); the runtime-config page is owned by the application.
 
-The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,74*002Kg,20*002Kg,02*002Ka` (32
-read-only bootloader pages, 74 slot pages, 20 preset-slot pages, 2 read-only pages for the floor and
+The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,64*002Kg,30*002Kg,02*002Ka` (32
+read-only bootloader pages, 64 slot pages, 30 preset-slot pages, 2 read-only pages for the floor and
 the runtime config).
 
 The bootloader publishes this layout in a 32-byte **info block** at `0x080001E0` (end of the vector

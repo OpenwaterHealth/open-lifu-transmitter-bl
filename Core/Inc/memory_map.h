@@ -18,10 +18,10 @@
   * (openlifu-transmitter-fw): change both together.
   *
   *   pages   0- 31  0x08000000  secure bootloader (64 KB)
-  *   pages  32-105  0x08010000  application slot (148 KB): signed header, then
+  *   pages  32- 95  0x08010000  application slot (128 KB): signed header, then
   *                              the image at +0x400
-  *   pages 106-125  0x08035000  presets (40 KB): 10 slots of 4 KB (two
-  *                              pages), preset N at 0x08035000 + N x 0x1000
+  *   pages  96-125  0x08030000  presets (60 KB): 15 slots of 4 KB (two
+  *                              pages), preset N at 0x08030000 + N x 0x1000
   *   page      126  0x0803F000  the bootloader's anti-rollback version log
   *   page      127  0x0803F800  runtime config (the application's lifu_config.h)
   *
@@ -51,22 +51,22 @@ extern "C" {
 #define MEM_BOOTLOADER_SIZE      0x00010000UL   /* 64 KB */
 #define MEM_BOOTLOADER_END       (MEM_BOOTLOADER_BASE + MEM_BOOTLOADER_SIZE)
 
-/* Application slot 1 (SBSFU active slot), pages 32-105 ----------------------
+/* Application slot 1 (SBSFU active slot), pages 32-95 -----------------------
  * Signed image header (SFU1, 0x140 bytes) at slot base; firmware body starts
  * at slot base + MEM_APP_IMAGE_OFFSET. The application must be linked at
  * MEM_APP_RUN_ADDRESS with its vector table there (VTOR). */
 #define MEM_SLOT1_BASE           0x08010000UL
-#define MEM_SLOT1_SIZE           0x00025000UL   /* 148 KB */
+#define MEM_SLOT1_SIZE           0x00020000UL   /* 128 KB */
 #define MEM_SLOT1_END            (MEM_SLOT1_BASE + MEM_SLOT1_SIZE)  /* exclusive */
 
-/* Presets, pages 106-125 ----------------------------------------------------
+/* Presets, pages 96-125 -----------------------------------------------------
  * The application's preset store. Outside the slot: not DFU writable, and
  * not part of slot verification. */
-#define MEM_PRESET_BASE          0x08035000UL
-#define MEM_PRESET_SIZE          0x0000A000UL   /* 40 KB */
+#define MEM_PRESET_BASE          0x08030000UL
+#define MEM_PRESET_SIZE          0x0000F000UL   /* 60 KB */
 #define MEM_PRESET_END           (MEM_PRESET_BASE + MEM_PRESET_SIZE)  /* exclusive */
 #define MEM_PRESET_SLOT_SIZE     0x00001000UL   /* 4 KB: two pages */
-#define MEM_PRESET_SLOT_COUNT    10U
+#define MEM_PRESET_SLOT_COUNT    15U
 #define MEM_PRESET_SLOT_BASE(n)  (MEM_PRESET_BASE + ((uint32_t)(n) * MEM_PRESET_SLOT_SIZE))
 /* A slot holds one signed preset: its PRS1 header (the SFU1 header layout,
  * sizeof(SE_FwRawHeaderTypeDef)), then the preset blob. DFU writes a slot only

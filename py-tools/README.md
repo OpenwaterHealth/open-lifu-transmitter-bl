@@ -4,7 +4,7 @@ Target: **STM32L443** (256 KB flash, 2 KB pages)
 Crypto scheme: `SECBOOT_ECCDSA_WITH_AES128_CBC_SHA256`
 Bootloader: `0x08000000` (64 KB); anti-rollback log page at `0x0803F000`
 DFU transports: **USB DfuSe** (host detected) or **I2C slave @ 0x72** (no USB host) — see `test/README.md`
-Application slot: `0x08010000` (148 KB, 74 × 2 KB pages)
+Application slot: `0x08010000` (128 KB, 64 × 2 KB pages)
 Application **runs from**: `0x08010400` (slot + `SFU_IMG_IMAGE_OFFSET`)
 
 > The bootloader authenticates the application before every boot: the firmware
@@ -125,10 +125,10 @@ Two edits:
 
 ```ld
 /* application linker script */
-FLASH (rx) : ORIGIN = 0x08010400, LENGTH = 147K
+FLASH (rx) : ORIGIN = 0x08010400, LENGTH = 127K
 ```
-*(App slot 1 is 148K at 0x08010000; the app runs at 0x08010400, so the usable
-length is 148K − 0x400 = 147K. See Core/Inc/memory_map.h.)*
+*(App slot 1 is 128K at 0x08010000; the app runs at 0x08010400, so the usable
+length is 128K − 0x400 = 127K. See Core/Inc/memory_map.h.)*
 
 **5b. Vector table relocation (VTOR)** — in `Core/Src/system_stm32h7xx.c`:
 
@@ -354,10 +354,10 @@ Addr range              Size   Pages   Region                   DFU access
   0x08000000  ISR vectors
   0x08000200  SE CallGate + SECoreBin (key @ 0x08000400)
   0x08005600  SBSFU code (USB + I2C DFU transports)
-0x08010000-0x08034FFF   148K   32-105  APP SLOT 1 (active)      read/erase/write
+0x08010000-0x0802FFFF   128K   32-95   APP SLOT 1 (active)      read/erase/write
   0x08010000    └ signed header (0x400)
   0x08010400    └ application firmware (execution address)
-0x08035000-0x0803EFFF    40K   106-125 PRESETS (app-owned)      read-only
+0x08030000-0x0803EFFF    60K   96-125  PRESETS (15 x 4K slots)  read/write (signed PRS1 only)
 0x0803F000-0x0803F7FF     2K   126     ANTI-ROLLBACK FLOOR LOG  read-only
 0x0803F800-0x0803FFFF     2K   127     RUNTIME CONFIG (app)     read-only
 0x08040000  End of flash
