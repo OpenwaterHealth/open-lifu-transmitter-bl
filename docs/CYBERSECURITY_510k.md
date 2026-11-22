@@ -79,7 +79,7 @@ life-sustaining. These drive the cybersecurity risk tier per FDA guidance.]]`
 | MCU | STMicroelectronics STM32L443xx (Arm Cortex-M4F) |
 | Internal flash | 256 KB, single-bank, 128 × 2 KB erase pages |
 | SRAM | 48 KB SRAM1 (0x20000000) + 16 KB SRAM2 (0x10000000) |
-| Security IP | Secure Engine (SE) call-gate isolation, MPU, Flash WRP/RDP/PCROP, option bytes, IWDG |
+| Security IP | Secure Engine (SE) call gate, Flash WRP/RDP/PCROP, option bytes, IWDG. The MPU is not used for SE isolation (§12). |
 | External interfaces | USB FS (DFU update interface; application VCP), USART2/PA2 (half-duplex debug console **and** one-wire CALL_IN back-channel), USART3/PC10 (one-wire CALL_OUT relay), I²C1/PB6-PB7 (I²C-DFU slave + inter-board data bus), I²C2 (local sensor bus), SWD debug |
 
 **System topology.** Transmitter boards form a **daisy chain** (`master → slave → slave …`, up to 6
@@ -198,12 +198,12 @@ the **inter-board relay** path unique to the daisy-chained transmitter architect
 |----|--------|--------|----------------------|-----|
 | T-1 | Tampering | Attacker replaces/patches application firmware in flash. | Secure boot verifies ECDSA header signature + SHA-256 FW tag every boot; rejects on mismatch. | C-1, C-2 |
 | T-2 | Spoofing | Attacker installs forged firmware via USB **or** I²C DFU. | Downloaded image must carry a valid ECDSA signature; the **target** board verifies before execution regardless of transport. | C-1, C-4 |
-| T-3 | Tampering | Attacker modifies the bootloader or keys. | Bootloader + SECoreBin in read-only pages 0–31; (production) Flash WRP/RDP/PCROP and SE MPU isolation. | C-3, C-7 |
+| T-3 | Tampering | Attacker modifies the bootloader or keys. | Bootloader + SECoreBin in read-only pages 0–31; (production) Flash WRP/RDP/PCROP. | C-3, C-7 |
 | T-4 | Information disclosure | Firmware IP extracted in transit. | AES-128-CBC encryption of the distributed payload. | C-5 |
 | T-5 | Information disclosure | Keys/firmware read out via debug port. | (Production) RDP Level ≥ 1, DAP disable, PCROP on key region; SE call-gate isolation. | C-7 |
 | T-6 | Denial of service | Corrupt/partial update bricks a board. | Update is verified before execution; invalid slot → safe recovery (DFU re-entry), never executes bad code; boot-fail counter forces recovery DFU. A wrong-key, tampered, downgraded or oversized image is refused **before the installed image is erased** (§5.4). Residual: the DFU erase itself is not authenticated, so a host with access can still interrupt an accepted download or send a genuine header with a corrupted body, leaving the board in recoverable DFU. | C-2, C-6 |
 | T-7 | Tampering | "Additional code beyond firmware" hidden in slot. | Bootloader verifies the unused slot region is empty before launch. | C-2 |
-| T-8 | Elevation of privilege | Application calls protected Secure Engine services illegitimately. | SE call-gate validates caller region; (production) MPU privilege isolation. | C-7 |
+| T-8 | Elevation of privilege | Application calls protected Secure Engine services illegitimately. | SE call-gate validates caller region. The MPU does not isolate the SE (the application runs privileged); compensating controls: PCROP on the key, SE-RAM key wipe on exit (§12). | C-7 |
 | T-9 | Tampering | Rollback to a known-vulnerable signed firmware. | Signed-header firmware version (`FwVersion`) + **boot-time anti-rollback**: the bootloader refuses to launch any image whose verified version is below a persistent monotonic floor, and invalidates the downgrade so it cannot boot (§5.6). **Implemented & bench-verified on STM32L443.** | C-8 |
 | T-10 | Spoofing | Compromise of the off-device signing key. | HSM/controlled key custody, least-privilege signing, key rotation procedure. | C-9 |
 | T-11 | Spoofing / Tampering | Compromised **master** relays a malicious image to a slave over I²C. | Slave verifies the image with its **own** secure boot before execution; the relay is not a trust anchor (§4.2 note). Unsigned/tampered relayed images are rejected. | C-1, C-2, C-4 |
@@ -258,8 +258,10 @@ the next reset before it can execute.
 - Bootloader and Secure Engine reside in flash **pages 0–31 (0x08000000–0x0800FFFF)**, marked read-only
   over the update interface and (in production) write-protected by hardware Option Bytes.
 - The Secure Engine exposes cryptographic services through a **call-gate** that validates the caller
-  originates from the trusted bootloader interface region; in production the SE RAM/ROM is isolated by
-  MPU (`SFU_ISOLATE_SE_WITH_MPU` — the L4 port uses the MPU in place of the H7 firewall IP).
+  originates from the trusted bootloader interface region. The SE is **not** isolated by the MPU or the
+  L443 firewall in any variant (`SFU_MPU_PROTECT_ENABLE` and `SFU_FWALL_PROTECT_ENABLE` are off in
+  `SBSFU/App/Inc/app_sfu.h`): the application runs privileged, so the MPU cannot fence it out. The key
+  is protected by PCROP and the SE-RAM wipe on exit instead (§12).
 - Verification is **fail-closed**: any signature, hash, or layout check failure prevents execution of
   the candidate image.
 - A **boot-fail counter** (in an RTC backup register) forces the controlled DFU recovery path if the
@@ -371,7 +373,7 @@ one-wire discovery enumeration the application uses and accepts a **unique** ass
 | C-4 | DFU (USB **and** I²C) restricted to app slot; signed-only install | SO-6, T-2/T-11 | §8 TC-DFU-*, TC-I2CDFU-* |
 | C-5 | AES-128-CBC transport confidentiality | SO-3, T-4 | §8 TC-CONF-* |
 | C-6 | Fail-closed verification; safe recovery on invalid FW; boot-fail counter | SO-5, T-6/T-12 | §8 TC-FAILCLOSED-* |
-| C-7 | Hardware protections: RDP, WRP, PCROP, DAP, MPU/SE isolation | SO-4, T-3/T-5/T-8 | §8 TC-HWPROT-* / §12 |
+| C-7 | Hardware protections: RDP, WRP, PCROP, DAP, SE-RAM wipe (no MPU/firewall SE isolation) | SO-4, T-3/T-5/T-8 | §8 TC-HWPROT-* / §12 |
 | C-8 | Signed `FwVersion` + boot-time monotonic anti-rollback floor (§5.6) | SO-5, T-9 | §8 TC-ROLLBACK-* |
 | C-9 | Off-device key custody (HSM), provisioning, rotation | A3, T-10 | §8 TC-KEY-* `[[TODO procedure]]` |
 | C-10 | Protected runtime-config page (no DFU erase/write) | data integrity | §8 TC-USERCFG-* |
@@ -527,7 +529,7 @@ Per FDA labeling expectations, provide to users/operators: `[[TODO: Regulatory t
 
 `[[TODO: Manufacturing — document the Option Byte provisioning step and verification at production
 test, and confirm keys are unique-per-product or per-product-family per the security risk assessment.
-Note the L4 port isolates the Secure Engine with the MPU (not the H7 firewall IP).]]`
+Note the L4 port does not isolate the Secure Engine with the MPU or the firewall; see the MPU row above.]]`
 
 ---
 
