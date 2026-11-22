@@ -88,6 +88,12 @@ extern "C" {
  *  Read  response: [status:1][state:1][version:I2C_DFU_VERSION_STR_MAX] */
 #define I2C_DFU_CMD_GETVERSION     0x06U
 
+/** Query the DFU capabilities (Core/Inc/dfu_preset.h): the I2C form of the USB
+ *  capability upload. A bootloader without it answers I2C_DFU_STATUS_ERROR.
+ *  Write payload: (none)
+ *  Read  response: [status:1][state:1]["OWC1":4][caps:4 LE]  (10 bytes) */
+#define I2C_DFU_CMD_GETCAPS        0x07U
+
 /** Maximum length of the version string field in a GETVERSION response (bytes,
  *  null-padded).  The total read length for GETVERSION is (2 + this value). */
 #define I2C_DFU_VERSION_STR_MAX    32U
@@ -100,6 +106,11 @@ extern "C" {
 #define I2C_DFU_STATUS_ERROR       0x02U  /**< Generic / protocol error */
 #define I2C_DFU_STATUS_BAD_ADDR    0x03U  /**< Address outside writable region */
 #define I2C_DFU_STATUS_FLASH_ERR   0x04U  /**< HAL flash erase/program failure */
+/** Image refused before anything was erased: the first DNLOAD was not a signed
+ *  SFU1 header at the slot start, or the header failed the check (signature,
+ *  version below the installed one / anti-rollback floor, size). The installed
+ *  image is intact. See Core/Inc/dfu_guard.h. */
+#define I2C_DFU_STATUS_REJECTED    0x05U
 
 /* -------------------------------------------------------------------------
  * DFU state codes  (byte[1] of every read response)

@@ -26,6 +26,8 @@
 #include "i2c_dfu_if.h"
 #include "common.h"
 #include "memory_map.h"
+#include "dfu_guard.h" /* pre-erase header check (shared with the USB DFU) */
+#include "dfu_preset.h" /* signed preset slots (shared with the USB DFU) */
 #include "utils.h"    /* delay_ms (tick-free; the HAL TIM6 tick may be stalled
                        * on the DFU path, so HAL_Delay must not be used here) */
 #include <string.h>
@@ -105,26 +107,27 @@ extern IWDG_HandleTypeDef hiwdg;
  * Private helpers
  * ---------------------------------------------------------------------- */
 
-/**
- * A new application image is being installed: clear the failsafe boot counter
- * (RTC->BKP6R) so the freshly flashed firmware gets a clean set of boot
- * attempts — same rationale as the USB DFU path (usbd_dfu_if.c). Backup-domain
- * write access was already enabled in main(); re-assert DBP defensively.
- */
-static void clear_boot_counter(void)
+/* (Re)start the I2C1 slave at g_slave_addr and listen. DeInit/Init re-runs
+ * MspInit (clocks, PB6/PB7, NVIC) and rewrites OAR1. DFU state is untouched. */
+static void i2c_slave_online(void)
 {
-    HAL_PWR_EnableBkUpAccess();
-    RTC->BKP6R = 0U;
-    __DSB();
+    g_rx_step = 0;
+    GLOBAL_I2C_DEVICE->Init.OwnAddress1 = (uint32_t)(g_slave_addr << 1U);
+    if (HAL_I2C_Init(GLOBAL_I2C_DEVICE) != HAL_OK)                            { Error_Handler(); }
+    if (HAL_I2CEx_ConfigAnalogFilter(GLOBAL_I2C_DEVICE, I2C_ANALOGFILTER_ENABLE) != HAL_OK) { Error_Handler(); }
+    if (HAL_I2CEx_ConfigDigitalFilter(GLOBAL_I2C_DEVICE, 0U) != HAL_OK)       { Error_Handler(); }
+    if (HAL_I2C_EnableListen_IT(GLOBAL_I2C_DEVICE) != HAL_OK)                 { Error_Handler(); }
 }
 
-static uint32_t get_page(uint32_t addr)
+/* Take the slave off the bus while interrupts will be masked for a long time
+ * (the Secure Engine header check, ~1.5 s). Listening, the peripheral would
+ * hold SCL low on the master's next poll for that whole time, far past the
+ * master's 250 ms transaction timeout. Off the bus, the poll gets an address
+ * NACK at once and the bus stays clean; the host retries the poll until the
+ * slave is back with the result (BUSY is already set for it). */
+static void i2c_slave_offline(void)
 {
-    if (addr < (FLASH_BASE + FLASH_BANK_SIZE))
-    {
-        return (addr - FLASH_BASE) / FLASH_PAGE_SIZE;
-    }
-    return (addr - (FLASH_BASE + FLASH_BANK_SIZE)) / FLASH_PAGE_SIZE;
+    (void)HAL_I2C_DeInit(GLOBAL_I2C_DEVICE);
 }
 
 static uint8_t is_writable(uint32_t addr)
@@ -133,30 +136,35 @@ static uint8_t is_writable(uint32_t addr)
     return 0U;
 }
 
+/* Erase requests go through the guard (Core/Inc/dfu_guard.h): they are only
+ * recorded until the download's signed header has passed the check, and each
+ * page is erased just before its first block is programmed. An executed erase
+ * clears the failsafe boot counter (RTC->BKP6R). */
 static uint8_t do_erase(uint32_t addr)
 {
-    FLASH_EraseInitTypeDef erase = {0};
-    uint32_t page_error = 0U;
-
-    erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    erase.NbPages   = 1U;
-    erase.Banks     = FLASH_BANK_1;
-
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_WRPERR | FLASH_FLAG_PROGERR);
+    /* A preset slot: erased now, and only once a signed preset header was
+     * staged (dfu_preset.h). */
+    if (DFU_Preset_InRegion(addr) != 0U)
+    {
+        switch (DFU_Preset_EraseSlot(addr))
+        {
+            case DFU_PRESET_OK:      return I2C_DFU_STATUS_OK;
+            case DFU_PRESET_REFUSED: return I2C_DFU_STATUS_REJECTED;
+            default:                 return I2C_DFU_STATUS_FLASH_ERR;
+        }
+    }
 
     if (addr == ERASE_ALL_ADDR)
     {
         for (uint32_t a = DFU_APP_START; a < DFU_APP_END; a += FLASH_PAGE_SIZE)
         {
-            erase.Page = get_page(a);
-            if (HAL_FLASHEx_Erase(&erase, &page_error) != HAL_OK)
+            if (DFU_Guard_RequestErase(a) != DFU_GUARD_OK)
             {
                 return I2C_DFU_STATUS_FLASH_ERR;
             }
-            /* Refresh watchdog during the potentially long full-erase loop */
+            /* Refresh watchdog: once a header is accepted this loop erases */
             HAL_IWDG_Refresh(&hiwdg);
         }
-        clear_boot_counter();
         return I2C_DFU_STATUS_OK;
     }
 
@@ -165,14 +173,37 @@ static uint8_t do_erase(uint32_t addr)
     {
         return I2C_DFU_STATUS_BAD_ADDR;
     }
+    return (DFU_Guard_RequestErase(page_addr) == DFU_GUARD_OK)
+           ? I2C_DFU_STATUS_OK : I2C_DFU_STATUS_FLASH_ERR;
+}
 
-    erase.Page = get_page(page_addr);
-    if (HAL_FLASHEx_Erase(&erase, &page_error) != HAL_OK)
+/* Signed preset: stage its header, or write the slot it was bound to. The
+ * header's signature check (~1.5 s) and the completing block's hash check run
+ * in the Secure Engine with interrupts masked, so the slave goes off the bus
+ * meanwhile, as for a firmware header: listening, it would hold SCL low on
+ * the master's next poll. */
+static uint8_t do_preset_write(const uint8_t *src, uint32_t dest, uint32_t len)
+{
+    DFU_PresetStatus st;
+    uint8_t offline = ((dest == DFU_PRESET_STAGE_VIRT_ADDR) ||
+                       (DFU_Preset_Completes(dest, len) != 0U)) ? 1U : 0U;
+
+    if (offline != 0U) { i2c_slave_offline(); }
+    if (dest == DFU_PRESET_STAGE_VIRT_ADDR)
     {
-        return I2C_DFU_STATUS_FLASH_ERR;
+        st = DFU_Preset_Stage(src, len);
     }
-    clear_boot_counter();
-    return I2C_DFU_STATUS_OK;
+    else
+    {
+        st = DFU_Preset_Write(src, dest, len);
+    }
+    if (offline != 0U) { i2c_slave_online(); }
+    switch (st)
+    {
+        case DFU_PRESET_OK:      return I2C_DFU_STATUS_OK;
+        case DFU_PRESET_REFUSED: return I2C_DFU_STATUS_REJECTED;
+        default:                 return I2C_DFU_STATUS_FLASH_ERR;
+    }
 }
 
 static uint8_t do_write(const uint8_t *src, uint32_t dest, uint32_t len)
@@ -184,6 +215,24 @@ static uint8_t do_write(const uint8_t *src, uint32_t dest, uint32_t len)
     if ((is_writable(dest) == 0U) || (is_writable(dest + len - 1U) == 0U))
     {
         return I2C_DFU_STATUS_BAD_ADDR;
+    }
+
+    /* First block: must be the signed header and pass the check before
+     * anything is erased. Then erase any deferred page this block lands in.
+     * The check runs in the Secure Engine with interrupts masked (~1.5 s),
+     * so this slave is taken off the bus meanwhile (see i2c_slave_offline). */
+    uint8_t header_check = (DFU_Guard_HeaderAccepted() == 0U) ? 1U : 0U;
+    DFU_GuardStatus guard;
+
+    if (header_check != 0U) { i2c_slave_offline(); }
+    guard = DFU_Guard_PrepareWrite(src, dest, len);
+    if (header_check != 0U) { i2c_slave_online(); }
+
+    switch (guard)
+    {
+        case DFU_GUARD_OK:      break;
+        case DFU_GUARD_REFUSED: return I2C_DFU_STATUS_REJECTED;
+        default:                return I2C_DFU_STATUS_FLASH_ERR;
     }
 
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_WRPERR | FLASH_FLAG_PROGERR);
@@ -208,6 +257,32 @@ static uint8_t do_write(const uint8_t *src, uint32_t dest, uint32_t len)
         }
     }
     return I2C_DFU_STATUS_OK;
+}
+
+/* DNLOAD: a preset (its staged header, or its slot), else firmware in the slot. */
+static uint8_t do_dnload(const uint8_t *src, uint32_t dest, uint32_t len)
+{
+    if ((dest == DFU_PRESET_STAGE_VIRT_ADDR) || (DFU_Preset_InRegion(dest) != 0U))
+    {
+        return do_preset_write(src, dest, len);
+    }
+    return do_write(src, dest, len);
+}
+
+/* MANIFEST queued by process_inline() only when an accepted download left
+ * requested pages unerased (the old image's tail): erase them so SBSFU's
+ * blank-slot check accepts the new image. */
+static uint8_t do_manifest(void)
+{
+    uint8_t result;
+
+    g_dfu_state = I2C_DFU_STATE_MANIFEST;
+    result = (DFU_Guard_ErasePendingPages() == DFU_GUARD_OK)
+             ? I2C_DFU_STATUS_OK : I2C_DFU_STATUS_FLASH_ERR;
+    HAL_FLASH_Lock();
+    g_dfu_state = (result == I2C_DFU_STATUS_OK)
+                  ? I2C_DFU_STATE_IDLE : I2C_DFU_STATE_ERROR;
+    return result;
 }
 
 static void set_response(uint8_t status)
@@ -274,7 +349,7 @@ static void process_command(void)
 
             g_dfu_state = I2C_DFU_STATE_DNBUSY;
             HAL_FLASH_Unlock();
-            result = do_write(&g_rx_buf[DATA_OFFSET], addr, (uint32_t)len);
+            result = do_dnload(&g_rx_buf[DATA_OFFSET], addr, (uint32_t)len);
             HAL_FLASH_Lock();
             g_dfu_state = (result == I2C_DFU_STATUS_OK)
                           ? I2C_DFU_STATE_DNLOAD_IDLE
@@ -293,10 +368,7 @@ static void process_command(void)
         /* ---- MANIFEST ------------------------------------------------ */
         case I2C_DFU_CMD_MANIFEST:
         {
-            g_dfu_state = I2C_DFU_STATE_MANIFEST;
-            HAL_FLASH_Lock();
-            g_dfu_state = I2C_DFU_STATE_IDLE;
-            result = I2C_DFU_STATUS_OK;
+            result = do_manifest();
             break;
         }
 
@@ -379,8 +451,32 @@ static void process_inline(uint8_t cmd)
             break;
         }
 
+        case I2C_DFU_CMD_GETCAPS:
+        {
+            g_tx_buf[0]   = I2C_DFU_STATUS_OK;
+            g_tx_buf[1]   = g_dfu_state;
+            DFU_Preset_Caps(&g_tx_buf[2]);
+            g_tx_len      = (uint16_t)(2U + DFU_CAPS_LEN);
+            g_last_status = I2C_DFU_STATUS_OK;
+            break;
+        }
+
         case I2C_DFU_CMD_MANIFEST:
         {
+            /* Tail pages still to erase: hand the work to the main loop and
+             * report BUSY until it is done (the master polls GETSTATUS). */
+            if ((DFU_Guard_HasPendingPages() != 0U) && (g_mod_state == MOD_IDLE))
+            {
+                g_rx_buf[CMD_OFFSET] = I2C_DFU_CMD_MANIFEST;
+                g_rx_len      = 1U;
+                g_tx_buf[0]   = I2C_DFU_STATUS_BUSY;
+                g_tx_buf[1]   = I2C_DFU_STATE_DNBUSY;
+                g_tx_len      = 2U;
+                g_dfu_state   = I2C_DFU_STATE_DNBUSY;
+                g_last_status = I2C_DFU_STATUS_BUSY;
+                g_mod_state   = MOD_CMD_READY;
+                return;
+            }
             HAL_FLASH_Lock();
             g_dfu_state   = I2C_DFU_STATE_IDLE;
             g_last_status = I2C_DFU_STATUS_OK;
@@ -434,6 +530,8 @@ void I2C_DFU_Init(I2C_HandleTypeDef *hi2c)
     g_last_status = I2C_DFU_STATUS_OK;
     g_rx_len      = 0U;
     g_rx_step     = 0;
+    DFU_Guard_StartSession();   /* every download starts with an unchecked header */
+    DFU_Preset_StartSession();  /* and nothing staged for the preset slots */
 
     /* Default transmit response: OK + IDLE */
     g_tx_buf[0] = I2C_DFU_STATUS_OK;
@@ -486,11 +584,7 @@ void I2C_DFU_SetAddress(uint8_t addr7)
     if (GLOBAL_I2C_DEVICE != NULL && GLOBAL_I2C_DEVICE->Instance == I2C1)
     {
         HAL_I2C_DeInit(GLOBAL_I2C_DEVICE);
-        GLOBAL_I2C_DEVICE->Init.OwnAddress1 = (uint32_t)(g_slave_addr << 1U);
-        if (HAL_I2C_Init(GLOBAL_I2C_DEVICE) != HAL_OK)                            { Error_Handler(); }
-        if (HAL_I2CEx_ConfigAnalogFilter(GLOBAL_I2C_DEVICE, I2C_ANALOGFILTER_ENABLE) != HAL_OK) { Error_Handler(); }
-        if (HAL_I2CEx_ConfigDigitalFilter(GLOBAL_I2C_DEVICE, 0U) != HAL_OK)       { Error_Handler(); }
-        if (HAL_I2C_EnableListen_IT(GLOBAL_I2C_DEVICE) != HAL_OK)                 { Error_Handler(); }
+        i2c_slave_online();
     }
 }
 
@@ -509,6 +603,10 @@ void I2C_DFU_Process(void)
 
     if (g_mod_state == MOD_RESET)
     {
+        /* A master that resets without MANIFEST: finish the accepted download
+         * (no-op when no header was accepted, so the image is never erased). */
+        (void)DFU_Guard_ErasePendingPages();
+
         /* Small delay lets the master complete its status read before we reset.
          * delay_ms() is tick-free (utils.c): the HAL tick may be stalled here. */
         delay_ms(20U);

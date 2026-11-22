@@ -79,7 +79,7 @@ life-sustaining. These drive the cybersecurity risk tier per FDA guidance.]]`
 | MCU | STMicroelectronics STM32L443xx (Arm Cortex-M4F) |
 | Internal flash | 256 KB, single-bank, 128 × 2 KB erase pages |
 | SRAM | 48 KB SRAM1 (0x20000000) + 16 KB SRAM2 (0x10000000) |
-| Security IP | Secure Engine (SE) call-gate isolation, MPU, Flash WRP/RDP/PCROP, option bytes, IWDG |
+| Security IP | Secure Engine (SE) call gate, Flash WRP/RDP/PCROP, option bytes, IWDG. The MPU is not used for SE isolation (§12). |
 | External interfaces | USB FS (DFU update interface; application VCP), USART2/PA2 (half-duplex debug console **and** one-wire CALL_IN back-channel), USART3/PC10 (one-wire CALL_OUT relay), I²C1/PB6-PB7 (I²C-DFU slave + inter-board data bus), I²C2 (local sensor bus), SWD debug |
 
 **System topology.** Transmitter boards form a **daisy chain** (`master → slave → slave …`, up to 6
@@ -106,24 +106,30 @@ scripts, `usbd_dfu_if.c`, and the `py-tools` signing/flash defaults):
 Addr range              Size   Pages   Region                Access control
 -----------------------------------------------------------------------------------
 0x08000000-0x0800FFFF   64K    0-31    BOOTLOADER (SBSFU+SE)  read-only via DFU (immutable)
-0x08010000-0x0803EFFF   188K   32-125  APP SLOT 1 (active)    updatable (signed) — DFU writable window
+0x08010000-0x0802FFFF   128K   32-95   APP SLOT 1 (active)    updatable (signed) — DFU writable window
                                         · SFU1 header @ 0x08010000 (0x140 bytes)
                                         · app body/vectors @ 0x08010400 (VTOR)
+0x08030000-0x0803EFFF   60K    96-125  PRESET SLOTS (15x4K)   updatable (signed PRS1 preset) via DFU
 0x0803F000-0x0803F7FF   2K     126     ANTI-ROLLBACK FLOOR    read-only via DFU (bootloader-managed)
-0x0803F800-0x0803FFFF   2K     127     USER CONFIG            read-only via DFU (application-managed)
+0x0803F800-0x0803FFFF   2K     127     RUNTIME CONFIG         read-only via DFU (application-managed)
 ```
 
-The DFU update interface (USB **and** I²C) restricts erase/write to the **active application slot
-only** (`0x08010000`–`0x0803EFFF`, the SBSFU `SLOT_ACTIVE_1` extent). The DFU writable window
-(`MEM_DFU_WRITABLE_BASE`..`MEM_DFU_WRITABLE_END`) is deliberately clamped to the slot so that **all
-DFU-writable flash is covered by secure-boot slot verification** — no writable region escapes the
-verification check. The bootloader pages (0–31), the anti-rollback floor page (126), and the
-user-config page (127) are **not erasable or writable** through either update interface. The
-anti-rollback floor page is written only by the bootloader during verified boot (§5.6); the
-user-config page is owned by the application.
+The DFU update interface (USB **and** I²C) restricts firmware erase/write to the **active
+application slot** (`0x08010000`–`0x0802FFFF`, the SBSFU `SLOT_ACTIVE_1` extent), so all firmware it
+writes is covered by secure-boot slot verification. The only other region it writes is the **preset
+slots** (15 slots of 4 KB, `0x08030000 + N × 0x1000`), and each one only with a **signed preset**
+whose `PRS1` header verified first (§5.4). The bootloader pages (0–31), the anti-rollback floor page
+(126), and the runtime-config page (127) are **not erasable or writable** through either update
+interface. The anti-rollback floor page is written only by the bootloader during verified boot
+(§5.6); the runtime-config page is owned by the application.
 
-The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,94*002Kg,02*002Ka` (32 read-only
-bootloader pages, 94 read/write/erasable slot pages, 2 read-only pages for the floor + user config).
+The USB DfuSe alt-setting descriptor encodes this map as `32*002Ka,64*002Kg,30*002Kg,02*002Ka` (32
+read-only bootloader pages, 64 slot pages, 30 preset-slot pages, 2 read-only pages for the floor and
+the runtime config).
+
+The bootloader publishes this layout in a 32-byte **info block** at `0x080001E0` (end of the vector
+area; `bl_info.c`): magic `OWBI`, layout, slot range, preset range, capability word. The application
+stores presets only under a bootloader that has one.
 
 ### 2.4 Cryptographic scheme
 `SECBOOT_ECCDSA_WITH_AES128_CBC_SHA256`:
@@ -192,12 +198,12 @@ the **inter-board relay** path unique to the daisy-chained transmitter architect
 |----|--------|--------|----------------------|-----|
 | T-1 | Tampering | Attacker replaces/patches application firmware in flash. | Secure boot verifies ECDSA header signature + SHA-256 FW tag every boot; rejects on mismatch. | C-1, C-2 |
 | T-2 | Spoofing | Attacker installs forged firmware via USB **or** I²C DFU. | Downloaded image must carry a valid ECDSA signature; the **target** board verifies before execution regardless of transport. | C-1, C-4 |
-| T-3 | Tampering | Attacker modifies the bootloader or keys. | Bootloader + SECoreBin in read-only pages 0–31; (production) Flash WRP/RDP/PCROP and SE MPU isolation. | C-3, C-7 |
+| T-3 | Tampering | Attacker modifies the bootloader or keys. | Bootloader + SECoreBin in read-only pages 0–31; (production) Flash WRP/RDP/PCROP. | C-3, C-7 |
 | T-4 | Information disclosure | Firmware IP extracted in transit. | AES-128-CBC encryption of the distributed payload. | C-5 |
 | T-5 | Information disclosure | Keys/firmware read out via debug port. | (Production) RDP Level ≥ 1, DAP disable, PCROP on key region; SE call-gate isolation. | C-7 |
-| T-6 | Denial of service | Corrupt/partial update bricks a board. | Update is verified before execution; invalid slot → safe recovery (DFU re-entry), never executes bad code; boot-fail counter forces recovery DFU. | C-2, C-6 |
+| T-6 | Denial of service | Corrupt/partial update bricks a board. | Update is verified before execution; invalid slot → safe recovery (DFU re-entry), never executes bad code; boot-fail counter forces recovery DFU. A wrong-key, tampered, downgraded or oversized image is refused **before the installed image is erased** (§5.4). Residual: the DFU erase itself is not authenticated, so a host with access can still interrupt an accepted download or send a genuine header with a corrupted body, leaving the board in recoverable DFU. | C-2, C-6 |
 | T-7 | Tampering | "Additional code beyond firmware" hidden in slot. | Bootloader verifies the unused slot region is empty before launch. | C-2 |
-| T-8 | Elevation of privilege | Application calls protected Secure Engine services illegitimately. | SE call-gate validates caller region; (production) MPU privilege isolation. | C-7 |
+| T-8 | Elevation of privilege | Application calls protected Secure Engine services illegitimately. | SE call-gate validates caller region. The MPU does not isolate the SE (the application runs privileged); compensating controls: PCROP on the key, SE-RAM key wipe on exit (§12). | C-7 |
 | T-9 | Tampering | Rollback to a known-vulnerable signed firmware. | Signed-header firmware version (`FwVersion`) + **boot-time anti-rollback**: the bootloader refuses to launch any image whose verified version is below a persistent monotonic floor, and invalidates the downgrade so it cannot boot (§5.6). **Implemented & bench-verified on STM32L443.** | C-8 |
 | T-10 | Spoofing | Compromise of the off-device signing key. | HSM/controlled key custody, least-privilege signing, key rotation procedure. | C-9 |
 | T-11 | Spoofing / Tampering | Compromised **master** relays a malicious image to a slave over I²C. | Slave verifies the image with its **own** secure boot before execution; the relay is not a trust anchor (§4.2 note). Unsigned/tampered relayed images are rejected. | C-1, C-2, C-4 |
@@ -252,8 +258,10 @@ the next reset before it can execute.
 - Bootloader and Secure Engine reside in flash **pages 0–31 (0x08000000–0x0800FFFF)**, marked read-only
   over the update interface and (in production) write-protected by hardware Option Bytes.
 - The Secure Engine exposes cryptographic services through a **call-gate** that validates the caller
-  originates from the trusted bootloader interface region; in production the SE RAM/ROM is isolated by
-  MPU (`SFU_ISOLATE_SE_WITH_MPU` — the L4 port uses the MPU in place of the H7 firewall IP).
+  originates from the trusted bootloader interface region. The SE is **not** isolated by the MPU or the
+  L443 firewall in any variant (`SFU_MPU_PROTECT_ENABLE` and `SFU_FWALL_PROTECT_ENABLE` are off in
+  `SBSFU/App/Inc/app_sfu.h`): the application runs privileged, so the MPU cannot fence it out. The key
+  is protected by PCROP and the SE-RAM wipe on exit instead (§12).
 - Verification is **fail-closed**: any signature, hash, or layout check failure prevents execution of
   the candidate image.
 - A **boot-fail counter** (in an RTC backup register) forces the controlled DFU recovery path if the
@@ -270,8 +278,40 @@ the next reset before it can execute.
   address **0x72**, runtime-reassignable — see §5.7). The upstream master relays the download as a
   sequence of I²C transactions (write-block / erase / manifest / reset). Byte-for-byte the same signed
   image is written to the slot.
-- Both interfaces restrict writes/erases to the **application slot**; the bootloader, anti-rollback,
-  and user-config pages are rejected (out-of-window addresses return an error).
+- Both interfaces restrict firmware writes/erases to the **application slot**; the bootloader,
+  anti-rollback, and runtime-config pages are rejected (out-of-window addresses return an error).
+- **Signed preset slots (both interfaces, `Core/Src/dfu_preset.c`).** A preset slot is written only
+  as: (1) **stage** the preset's 320-byte `PRS1` header at the virtual address `0xFFFFFF20` — checked
+  for the `PRS1` magic, a blob size that fits a slot, and its **ECDSA signature through the Secure
+  Engine** (the same key as the firmware: the Secure Engine maps `PRS1` to the `SLOT_ACTIVE_1` key;
+  the distinct magic keeps a preset header from passing as a firmware header and vice versa); a refused
+  header changes nothing; (2) **erase** one slot, which binds the staged header to it; (3) **write**
+  the slot — the header bytes must be the staged ones and everything past the blob `0xFF`; the block
+  that completes the blob checks the header in flash against the staged one and the blob's SHA-256
+  against it, and **erases the slot** on a mismatch. One stage covers one slot. Slot verification at
+  boot ignores the preset slots (they are outside the slot), and a firmware update never erases them.
+- **Capabilities.** The capability word (`OWC1` + bits: 1 = header check before erase, 2 = signed
+  preset slots) is served at the USB virtual upload address `0xFFFFFF18` and by the I²C `GETCAPS`
+  command (`0x07`), and copied into the info block (§2.3).
+- **Header check before erase (both interfaces, `Core/Src/dfu_guard.c`).** There is one slot, so a
+  download must erase the installed image before the new one is complete. Erase requests are
+  therefore recorded, not executed: the first block a host writes must be the signed header at the
+  slot start, and it is checked first — magic, **ECDSA header signature through the Secure Engine**,
+  `FwVersion` not below the installed version or the persistent floor (§5.6), and `FwSize` fits the
+  slot. Only then is each requested page erased, just before its first block is programmed; requested
+  pages the image does not reach are erased when the download finishes (USB: after manifestation;
+  I²C: on MANIFEST, or on RESET). A wrong-key image (another board's or another trust domain's), a
+  tampered header, a downgrade, or an oversized image is refused with the **installed image intact**
+  (USB: the DNLOAD fails, `dfuERROR`; I²C: status `0x05` REJECTED). Each host request still carries
+  at most one page erase, so the host protocol is unchanged. The body hash is still only checked at
+  boot: a genuine header with a corrupted body is accepted, then refused at the next boot (TC-DFU-08).
+- **Timing.** The signature check takes ~1.5 s with interrupts masked (Secure Engine call). USB
+  advertises a 2.5 s poll interval for the header block. On I²C the slave leaves the bus for the
+  check, so the master's status polls are NACKed (instead of the clock being held past the master's
+  250 ms transaction timeout); the host must retry the poll until a status arrives. **Host tools
+  that treat a failed poll as fatal (openlifu-sdk before the matching change) abort an I²C slave
+  update after the header block**, leaving the slave in DFU with an incomplete image (recoverable
+  by repeating the update with a fixed host).
 - After download the board resets and re-runs full verification before executing the new image.
 
 ### 5.5 Cryptographic design
@@ -296,9 +336,10 @@ version (threat T-9), the bootloader enforces a monotonic version floor:
   If `FwVersion < floor`, the bootloader (a) records a version-rejected error, (b) **invalidates the
   image** (erases its header) so it can never execute — even after a power cycle — and (c) resets into
   the controlled DFU recovery path. If `FwVersion ≥ floor`, the floor is raised and the image launches.
-- **DFU-time check (secondary / fast-fail).** During download, the bootloader also compares the
-  incoming image's version against the installed version and rejects an obvious downgrade before
-  committing, giving the operator immediate feedback. The boot-time floor remains authoritative.
+- **DFU-time check (secondary / fast-fail).** Before anything is erased, the bootloader checks the
+  incoming header's signature and compares its (now authenticated) `FwVersion` against the higher of
+  the installed version and the persistent floor; a downgrade is refused with the installed image
+  intact (§5.4). The boot-time floor remains authoritative.
 - **Residual risk.** The floor can only be cleared by erasing page 126, which requires debug/SWD
   access. Production units lock the debug port (RDP, §12), so the floor cannot be reset in the field.
 
@@ -332,10 +373,11 @@ one-wire discovery enumeration the application uses and accepts a **unique** ass
 | C-4 | DFU (USB **and** I²C) restricted to app slot; signed-only install | SO-6, T-2/T-11 | §8 TC-DFU-*, TC-I2CDFU-* |
 | C-5 | AES-128-CBC transport confidentiality | SO-3, T-4 | §8 TC-CONF-* |
 | C-6 | Fail-closed verification; safe recovery on invalid FW; boot-fail counter | SO-5, T-6/T-12 | §8 TC-FAILCLOSED-* |
-| C-7 | Hardware protections: RDP, WRP, PCROP, DAP, MPU/SE isolation | SO-4, T-3/T-5/T-8 | §8 TC-HWPROT-* / §12 |
+| C-7 | Hardware protections: RDP, WRP, PCROP, DAP, SE-RAM wipe (no MPU/firewall SE isolation) | SO-4, T-3/T-5/T-8 | §8 TC-HWPROT-* / §12 |
 | C-8 | Signed `FwVersion` + boot-time monotonic anti-rollback floor (§5.6) | SO-5, T-9 | §8 TC-ROLLBACK-* |
 | C-9 | Off-device key custody (HSM), provisioning, rotation | A3, T-10 | §8 TC-KEY-* `[[TODO procedure]]` |
-| C-10 | Protected user-config page (no DFU erase/write) | data integrity | §8 TC-USERCFG-* |
+| C-10 | Protected runtime-config page (no DFU erase/write) | data integrity | §8 TC-USERCFG-* |
+| C-12 | Preset slots written only with a staged, signature-verified `PRS1` preset; blob hash checked on completion, slot erased on mismatch | SO-1, SO-2, T-1/T-2 | §8 TC-PRESET-* |
 | C-11 | Relay is transport-only; per-board Root of Trust independent (§4.2, §5.7) | SO-1, T-11 | §8 TC-I2CDFU-02 |
 
 ---
@@ -392,11 +434,19 @@ vulnerability testing, and penetration testing.
 | TC-DFU-01 | USB DFU install of signed image succeeds | dfu-util + pure-Python flasher | **Pass** (verified on STM32L443) |
 | TC-DFU-02 | DFU write to bootloader pages rejected | `dfu-util` download targeting 0x08000000 | **Pass** (out-of-window rejected; bootloader pages read-only in descriptor) |
 | TC-DFU-03 | DFU write outside the active slot rejected | `dfu-util` download above the slot end (0x0803F000 / 0x0803F800) | **Pass** (floor + user-config pages rejected) |
+| TC-DFU-04 | Wrong-key image refused before erase (USB + I²C) | Image signed with the console key (other board); host erases the slot, then writes | **Pass** (2026-11-17, L443, research bench build): header block refused (USB `dfuERROR`; I²C status 0x05); slot read back over SWD identical to the installed image |
+| TC-DFU-05 | Tampered header refused before erase (USB + I²C) | `FwVersion` byte flipped after signing | **Pass** (2026-11-17): refused at the header block; installed image intact |
+| TC-DFU-06 | Downgrade refused before erase (USB + I²C) | (a) version below installed; (b) version equal to installed but below the persistent floor | **Pass** (2026-11-17): both refused at the header block; installed image intact |
+| TC-DFU-07 | Oversized image refused before erase (USB + I²C) | Genuinely signed header with `FwSize` > slot | **Pass** (2026-11-17): refused at the header block; installed image intact |
+| TC-DFU-08 | Genuine header, corrupted body | Body byte flipped after signing | **Pass** (2026-11-17, USB): accepted before erase (expected), refused at boot (slot zeroed), board in recoverable DFU |
+| TC-DFU-09 | Upgrade and smaller-image tail (USB + I²C) | Install v+1; then a 20 KB larger image; then a normal-size image over it | **Pass** (2026-11-17): each boots, floor raised each time; pages beyond the smaller image erased (USB after manifestation, I²C on MANIFEST); SDK `program_transmitter` path unchanged |
 | TC-USERCFG-01 | DFU write/erase of user-config rejected | Target 0x0803F800 | **Pass** (outside DFU writable window) |
 | TC-FAILCLOSED-01 | No/invalid FW → safe recovery, no code exec | Empty slot | **Pass** (enters DFU; no unauthenticated execution) |
+| TC-PRESET-01 | Signed preset accepted into its slot; slots outside slot verification | Stage a `PRS1` header signed with the trusted key at `0xFFFFFF20`, erase + write one slot; reset; then a firmware update | **Pass** (2026-11-19, L443, research bench build): USB (master) and I²C (slave, through the master); slot read back identical; app boots; a USB firmware update left the slot unchanged |
+| TC-PRESET-02 | Wrong-key / tampered / unstaged preset rejected | (a) header signed with another board's key, (b) blob altered after signing, (c) slot erase or write without staging | **Pass** (2026-11-19, USB and I²C): (a) refused at staging, slot untouched; (b) completing block refused and the slot erased; (c) refused |
 | TC-IMMUT-01 | Bootloader not modifiable via update path | Hash bootloader pages 0–31 before/after a DFU write attempt to 0x08000000 | Write rejected; hash-invariance `[[TODO: capture on L443]]` |
 | TC-I2CDFU-01 | I²C-DFU install of signed image succeeds | Master relays signed image to a downstream slave over I²C; slave verifies + boots | **Pass** (verified on STM32L443, full cycle) |
-| TC-I2CDFU-02 | I²C-DFU install of unsigned/tampered image rejected by slave | Relay a tampered image over I²C; observe slave secure-boot rejection | Expected reject at slave secure boot (relay is transport-only). `[[TODO: capture on L443]]` |
+| TC-I2CDFU-02 | I²C-DFU install of unsigned/tampered image rejected by slave | Relay a tampered image over I²C | **Pass** (2026-11-17): the slave refuses the header before erasing (status 0x05; TC-DFU-04/05); relay is transport-only |
 | TC-I2CDFU-03 | I²C-DFU write outside the active slot rejected | Relay a write targeting the bootloader / floor / config pages | **Pass** (I²C-DFU writable window clamped to slot; out-of-window returns BAD_ADDR) |
 | TC-BACKCHAN-01 | Two DFU-mode boards get unique I²C addresses | Drop two slaves into DFU; re-enumerate; verify both at unique 0x20/0x21 (not 0x72) and each independently programmable | **Pass** (verified on STM32L443; both programmed at assigned addresses, both returned to app) |
 | TC-HWPROT-01 | RDP/WRP/PCROP/DAP effective | Read/modify attempts via SWD | `[[TODO: production build]]` |
@@ -457,24 +507,29 @@ Per FDA labeling expectations, provide to users/operators: `[[TODO: Regulatory t
 
 ## 12. Production hardening requirements (CRITICAL)
 
-> The development configuration disables the STM32 hardware security IP for debuggability
+> The bootloader is built in two variants (`LIFU_BL_VARIANT`, `SBSFU/App/Inc/app_sfu.h`). The
+> **research** variant disables the STM32 hardware security IP for debuggability
 > (`SECBOOT_DISABLE_SECURITY_IPS`), which the build surfaces as intentional `#warning
-> "SFU_*_PROTECT_DISABLED"` reminders. **A device shipped for clinical use MUST be built and
-> provisioned with these protections ENABLED.** This is a release gate.
+> "SFU_*_PROTECT_DISABLED"` reminders. **A device shipped for clinical use MUST run the clinical
+> variant** (preset `Clinical`), which applies the protections below on first boot (check-and-apply,
+> `SECBOOT_OB_DEV_MODE`), also on the forced-DFU path (`SFU_BOOT_ApplyStaticProtectionsForDfu`).
+> This is a release gate.
 
-| Protection | Dev state | Production requirement |
-|------------|-----------|------------------------|
-| RDP (readout protection) | Off | **RDP Level ≥ 1** (Level 2 disables debug permanently — irreversible) |
-| WRP (write protection) | Off | **WRP on bootloader + SE pages (0–31)** (immutability) |
-| PCROP (code readout protection) | Off | **PCROP on key/SE region** |
-| DAP / debug access | Open | **Disabled** in production |
-| MPU / SE isolation | Off | **Enabled** (`SFU_ISOLATE_SE_WITH_MPU`) |
-| IWDG watchdog | Enabled in BL (~8.2 s) | **Enabled** (confirm window vs. app timing) |
-| Secure user memory (HDP/other) | Off | **Enabled** if required by risk assessment |
+| Protection | Research variant | Clinical variant |
+|------------|------------------|------------------|
+| RDP (readout protection) | Off (Level 0) | **RDP Level 1** (`SFU_RDP_PROTECT_ENABLE`). Level 2 (`SFU_FINAL_SECURE_LOCK_ENABLE`) stays off: it is irreversible. |
+| WRP (write protection) | Off | **WRP area A over pages 0–31** (`0x08000000`–`0x0800FFFF`: bootloader + SE) |
+| PCROP (code readout protection) | Off | **PCROP over the SE key region** (`0x08000400`–`0x080004FF`; `se_key.s` is execute-only MOVW/MOVT code) |
+| DAP / debug access | Open | **SWD pins released** by SBSFU before launch (`SFU_DAP_PROTECT_ENABLE`); RDP1 blocks flash access from a debugger |
+| DMA | Untouched | **DMA1/DMA2 clocks disabled** while SBSFU runs (`SFU_DMA_PROTECT_ENABLE`) |
+| MPU / SE isolation | Off | **Off** — the application runs privileged, so the MPU cannot fence it out of the SE; compensating controls: PCROP on the key, SE-RAM key wipe on exit (`SFU_WIPE_SE_RAM_ON_EXIT`, both variants), SE call-gate caller check. The L443 firewall (`SFU_FWALL_PROTECT_ENABLE`) is not used. |
+| IWDG watchdog | Armed by `main()` (~8.2 s) | Same |
+| Secure user memory | N/A (STM32H7 feature) | N/A (`#error` if enabled) |
+| Trusted signing key | Research key (`py-tools/keys/research/`) | Cloud KMS HSM key (`py-tools/keys/clinical/`) |
 
 `[[TODO: Manufacturing — document the Option Byte provisioning step and verification at production
 test, and confirm keys are unique-per-product or per-product-family per the security risk assessment.
-Note the L4 port isolates the Secure Engine with the MPU (not the H7 firewall IP).]]`
+Note the L4 port does not isolate the Secure Engine with the MPU or the firewall; see the MPU row above.]]`
 
 ---
 

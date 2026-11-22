@@ -50,7 +50,17 @@ endif()
 
 string(TIMESTAMP FW_BUILD_TIME_UTC "%Y-%m-%d %H:%M:%S UTC" UTC)
 
-message(STATUS "FW version   : ${FW_GIT_DESCRIBE}")
+# Bootloader variant (see app_sfu.h and the target settings below). FW_VERSION (DFU
+# version read over USB and I2C, USB product string "OW DFU <version>") is the
+# release, the same for both variants: which one a unit runs is told by which key its
+# firmware is signed with (openlifu-sdk firmware_domain(), OW_CMD_SIGCHK), since each
+# variant boots only images signed with its own key. The application's version
+# carries no variant either. Same as open-lifu-console-bl.
+set(LIFU_BL_VARIANT "research" CACHE STRING "Bootloader variant: research or clinical")
+set_property(CACHE LIFU_BL_VARIANT PROPERTY STRINGS research clinical)
+set(FW_VERSION_STRING "${FW_GIT_DESCRIBE}")
+
+message(STATUS "FW version   : ${FW_VERSION_STRING}")
 message(STATUS "FW git sha   : ${FW_GIT_SHA}")
 message(STATUS "FW build time: ${FW_BUILD_TIME_UTC}")
 
@@ -123,6 +133,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/lwrb.c
     Core/Src/utils.c
     Core/Src/i2c_dfu_if.c
+    Core/Src/dfu_guard.c
+    Core/Src/dfu_preset.c
 
     # SBSFU sources
     ${SBSFU_APP_SOURCES}
@@ -148,6 +160,25 @@ set_source_files_properties(
     Middlewares/ST/STM32_Secure_Engine/Core/se_interface_common.c
     PROPERTIES COMPILE_OPTIONS "-Os"
 )
+
+# Bootloader variant (LIFU_BL_VARIANT, declared above; see app_sfu.h):
+#   research : unlocked (RDP0, no WRP/PCROP), trusts py-tools/keys/research/ecdsa_public.pem
+#   clinical : WRP over the bootloader, PCROP over the SE key, RDP level 1, DAP and DMA
+#              protections, applied on first boot; trusts the KMS key
+#              py-tools/keys/clinical/ecdsa_public.pem. No debug console.
+if(LIFU_BL_VARIANT STREQUAL "clinical")
+    if(DEBUG_ENABLED)
+        message(FATAL_ERROR "DEBUG_ENABLED is not allowed in the clinical bootloader variant")
+    endif()
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE LIFU_BL_CLINICAL)
+elseif(LIFU_BL_VARIANT STREQUAL "research")
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE LIFU_BL_RESEARCH)
+else()
+    message(FATAL_ERROR "LIFU_BL_VARIANT must be research or clinical, got '${LIFU_BL_VARIANT}'")
+endif()
+# The SE key block (SECoreBin/Startup/se_key.s) must be generated from this variant's PEM.
+set(LIFU_BL_PEM "${CMAKE_SOURCE_DIR}/py-tools/keys/${LIFU_BL_VARIANT}/ecdsa_public.pem")
+message(STATUS "BL variant   : ${LIFU_BL_VARIANT} (trusts ${LIFU_BL_PEM})")
 
 if(DEBUG_ENABLED)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/logging.c)

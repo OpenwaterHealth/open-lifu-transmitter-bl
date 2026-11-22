@@ -1,0 +1,210 @@
+{
+  "description": "Open-LIFU transmitter secure bootloader: X-CUBE-SBSFU 2.8.0 for STM32L443 (TX module). ECDSA P-256 / SHA-256 secure boot via the STM32 Cryptographic Library, USB DfuSe and I2C DFU (slaves), anti-rollback floor, one-wire back-channel. SECoreBin is built separately and embedded in the bootloader image.",
+  "mcu": "STM32L443xx (Arm Cortex-M4F)",
+  "licenses": [
+    {
+      "license": {
+        "id": "Apache-2.0"
+      }
+    }
+  ],
+  "components": [
+    {
+      "type": "framework",
+      "name": "STM32Cube MCU Package for STM32L4 (FW_L4)",
+      "version": "1.18.2",
+      "supplier": {
+        "name": "STMicroelectronics"
+      },
+      "scope": "required",
+      "description": "STM32Cube package the HAL, CMSIS device files and middleware were generated from. The HAL / CMSIS versions actually in the tree are derived separately.",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:github/STMicroelectronics/STM32CubeL4@v1.18.2",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "open-lifu-transmitter-bl.ioc: ProjectManager.FirmwarePackage=STM32Cube FW_L4 V1.18.2. HAL v1.13.6 and CMSIS Device L4 v1.7.5 in the tree are the versions STM32CubeL4 v1.18.2 pins (its submodule commits, checked 2026-11-16); the USB Device Library is one release newer than the pack (v2.11.6, see that component)."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "STM32 USB Device Library (Core + DFU class)",
+      "version": "2.11.6",
+      "supplier": {
+        "name": "STMicroelectronics"
+      },
+      "scope": "required",
+      "description": "USB device stack and DfuSe class used by the bootloader's USB DFU update path. Byte-identical to upstream v2.11.6 except Class/DFU/Src/usbd_dfu.c (bitManifestationTolerant set), see Middlewares/ST/STM32_USB_Device_Library/LOCAL_CHANGES.md.",
+      "licenses": [
+        {
+          "license": {
+            "name": "SLA0044"
+          }
+        }
+      ],
+      "purl": "pkg:github/STMicroelectronics/stm32-mw-usb-device@v2.11.6",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "Core/ and Class/DFU/ diffed against upstream tags on 2026-11-16. Core updated from v2.11.5 (the STM32CubeL4 v1.18.2 pin) to v2.11.6 for the usbd_ctlreq.c fixes (USBD_StdEPReq endpoint index > 15 rejected; USBD_GetString bounded); the DFU class did not change between v2.11.5 and v2.11.6."
+        },
+        {
+          "name": "openwater:version-correction",
+          "value": "the hand-written SBOM listed 1.18.2, which is the FW_L4 package version, not the library version"
+        },
+        {
+          "name": "openwater:files",
+          "value": "Middlewares/ST/STM32_USB_Device_Library/Core/**/*, Middlewares/ST/STM32_USB_Device_Library/Class/**/*"
+        },
+        {
+          "name": "openwater:files-sha256",
+          "value": "5b617f857b42ead36089b3058bcb8f68a69d7c63ca8c6050f76c0c2e5c1a1c16"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "X-CUBE-SBSFU (Secure Boot and Secure Firmware Update)",
+      "version": "2.8.0",
+      "supplier": {
+        "name": "STMicroelectronics"
+      },
+      "scope": "required",
+      "description": "Secure boot framework (SBSFU/App, SBSFU/Target, SECoreBin) adapted by Openwater for the STM32L443 transmitter. Crypto scheme SECBOOT_ECCDSA_WITH_AES128_CBC_SHA256.",
+      "licenses": [
+        {
+          "license": {
+            "name": "SLA0044"
+          }
+        }
+      ],
+      "purl": "pkg:generic/st/x-cube-sbsfu@2.8.0",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "STM32CubeExpansion_SBSFU_V2.8.0 package: Release_Notes.html v2.8.0 / 05-September-2025; ST's sbom_cdx.json for that package lists STM32_Secure_Engine 2.5.4 and STM32 Cryptographic Middleware v3.1.5, the versions in this tree. Modified locally, so not hash-pinned."
+        },
+        {
+          "name": "openwater:advisory-review",
+          "value": "2026-11-16: ST SA0034 (KMS key generation, SBSFU 2.2.0-2.6.2), TN1528 (Mbed TLS, SBSFU <= 2.6.2) and SA0050 (bundled Python executables, SBSFU <= 2.7.0) do not apply to 2.8.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "STM32 Secure Engine",
+      "version": "2.5.4",
+      "supplier": {
+        "name": "STMicroelectronics"
+      },
+      "scope": "required",
+      "description": "Secure Engine core and interface (SECoreBin), the protected services used by the SBSFU bootloader.",
+      "licenses": [
+        {
+          "license": {
+            "name": "SLA0044"
+          }
+        }
+      ],
+      "purl": "pkg:generic/st/stm32-secure-engine@2.5.4",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "Middlewares/ST/STM32_Secure_Engine/Release_Notes.html: v2.5.4 / 26-September-2025"
+        },
+        {
+          "name": "openwater:files",
+          "value": "Middlewares/ST/STM32_Secure_Engine/**/*.c, Middlewares/ST/STM32_Secure_Engine/**/*.h, Middlewares/ST/STM32_Secure_Engine/**/*.s"
+        },
+        {
+          "name": "openwater:files-sha256",
+          "value": "fe784aaa28ae78471a55e951845556f7f5816ea2716824c8cdf60e32732362ba"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "STM32 Cryptographic Library (legacy V3, binary)",
+      "version": "3.0.0",
+      "supplier": {
+        "name": "STMicroelectronics"
+      },
+      "scope": "required",
+      "description": "Linked binary libSTM32CryptographicV3.0.0_CM4_GCC.a from the V3.1.5 middleware delivery. SECoreBin uses SHA-256, ECDSA P-256 verification and AES-128-CBC decryption only.",
+      "licenses": [
+        {
+          "license": {
+            "name": "SLA0044"
+          }
+        }
+      ],
+      "purl": "pkg:generic/st/stm32-cryptographic-library@3.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7c5e39b8e4e83a8c57eb9b13ad7a49d9367ac50afaea94e7d40603b99369d8bd"
+        }
+      ],
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "Middlewares/ST/STM32_Cryptographic/Release_Notes.html: V3.1.5 / 08-January-2021 (middleware delivery); SECoreBin/CMakeLists.txt links :libSTM32CryptographicV3.0.0_CM4_GCC.a (SHA-256 above)."
+        },
+        {
+          "name": "openwater:support-level",
+          "value": "Legacy library (UM1924), superseded by X-CUBE-CRYPTOLIB V4+/CMOX, which the console bootloader uses."
+        },
+        {
+          "name": "openwater:advisory-review",
+          "value": "2026-11-16: CVE-2020-20949 (Bleichenbacher attack on RSA PKCS#1 v1.5 in this library) does not apply: no RSA function is linked or called (SECoreBin/Src uses SHA256_*, ECDSA*/ECC* verify and AES_CBC_Decrypt_* only)."
+        },
+        {
+          "name": "openwater:files",
+          "value": "Middlewares/ST/STM32_Cryptographic/**/*"
+        },
+        {
+          "name": "openwater:files-sha256",
+          "value": "abac197eaa244c6f58966bfa028d64384ba224b52ca778c70f6d62ef7418782f"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "LwRB (lightweight ring buffer)",
+      "version": "2.0.0",
+      "supplier": {
+        "name": "Tilen Majerle"
+      },
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:github/MaJerle/lwrb@v2.0.0",
+      "properties": [
+        {
+          "name": "openwater:evidence",
+          "value": "Core/Src/lwrb.c, Core/Inc/lwrb.h: 'Version: v2.0.0', Copyright (c) 2020 Tilen MAJERLE, MIT; compiled via CMakeLists.txt"
+        },
+        {
+          "name": "openwater:files",
+          "value": "Core/Src/lwrb.c, Core/Inc/lwrb.h"
+        },
+        {
+          "name": "openwater:files-sha256",
+          "value": "3ed385078be080ac5728641839f537b0af48d10420672380ddd4efacf3424f90"
+        }
+      ]
+    }
+  ]
+}

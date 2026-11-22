@@ -44,7 +44,8 @@ import os as _os
 # checkout); only the public key is copied into py-tools/keys/ for reference.
 # Override with the LIFU_BL_KEYS environment variable.
 KEYS_DIR   = Path(_os.environ["LIFU_BL_KEYS"]) if _os.environ.get("LIFU_BL_KEYS")              else REPO_ROOT.parent / "bl-keys" / "transmitter"
-PUB_COPY   = Path(__file__).resolve().parent / "keys" / "ecdsa_public.pem"
+# Research key only: the clinical key is the KMS HSM key (py-tools/keys/clinical/).
+PUB_COPY   = Path(__file__).resolve().parent / "keys" / "research" / "ecdsa_public.pem"
 SE_KEY_S   = REPO_ROOT / "SECoreBin" / "Startup" / "se_key.s"
 
 

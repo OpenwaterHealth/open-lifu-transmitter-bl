@@ -87,6 +87,8 @@ extern "C" {
 #define SFUM_1 "SFU1"      /*!< Active Slot #1 : first active also referred as master */
 #define SFUM_2 "SFU2"      /*!< Active Slot #2 : second active slot */
 #define SFUM_3 "SFU3"      /*!< Active Slot #3 : third active slot */
+#define SFUM_PRESET "PRS1" /*!< A signed preset (Core/Inc/dfu_preset.h): signed with
+                                the SLOT_ACTIVE_1 firmware key, same header layout */
 
 /**
   * @}

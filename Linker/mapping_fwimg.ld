@@ -9,14 +9,15 @@
 /* Slots must be aligned on the 2 KB page size.
  * See Core/Inc/memory_map.h for the full flash partition map. Layout:
  *   pages 0-31    0x08000000   64K  bootloader (SBSFU + SE)
- *   pages 32-125  0x08010000  188K  APP SLOT 1 (active)   <-- this file
+ *   pages 32-95   0x08010000  128K  APP SLOT 1 (active)   <-- this file
+ *   pages 96-125  0x08030000   60K  presets (15 x 4K)
  *   page  126     0x0803F000    2K  anti-rollback version log
- *   page  127     0x0803F800    2K  user config (app-owned) */
+ *   page  127     0x0803F800    2K  runtime config (app-owned) */
 
-/* Active slot #1: pages 32-125 = 94 x 2 KB = 188 KB */
+/* Active slot #1: pages 32-95 = 64 x 2 KB = 128 KB */
 __ICFEDIT_SLOT_Active_1_header__ = 0x08010000;
 __ICFEDIT_SLOT_Active_1_start__  = 0x08010000;
-__ICFEDIT_SLOT_Active_1_end__    = 0x0803EFFF;
+__ICFEDIT_SLOT_Active_1_end__    = 0x0802FFFF;
 
 /* Slots 2 and 3 are not managed by SBSFU in this single-image configuration. */
 __ICFEDIT_SLOT_Active_2_header__ = 0x00000000;

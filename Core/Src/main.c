@@ -34,6 +34,8 @@
 #include "sfu_boot.h"     /* SFU_BOOT_RunSecureBootService */
 #include "usbd_dfu_if.h"  /* DFU_ImageDownloadComplete / rollback helpers */
 #include "i2c_dfu_if.h"   /* I2C slave DFU transport (no USB host present) */
+#include "dfu_guard.h"    /* pre-erase header check: tail erase after a download */
+#include "se_interface_bootloader.h" /* SE_Startup / SE_Init for the DFU header check */
 #include "ow_backchannel.h" /* Phase 2 one-wire discovery (Release build only) */
 
 #include <stdio.h>
@@ -272,6 +274,12 @@ int main(void)
     SFU_BOOT_InitErrorTypeDef e_boot = SFU_BOOT_RunSecureBootService();
     (void)e_boot;  /* non-zero only on critical SE/security-IP init failure */
   }
+  else
+  {
+    /* Forced DFU bypasses the secure boot service, which is where the option-byte
+     * protections are applied. Apply them here (clinical variant; no-op in research). */
+    SFU_BOOT_ApplyStaticProtectionsForDfu();
+  }
 
   /*
    * Execution only reaches this point when no valid signed application will run
@@ -301,6 +309,20 @@ int main(void)
 #else
   (void)boot_fail;
 #endif
+
+  /* The DFU paths check each download's signed header through the Secure Engine
+   * before anything is erased (Core/Inc/dfu_guard.h). Bring the SE up for that
+   * here: on the forced-DFU path SBSFU never ran, and on the no-valid-firmware
+   * path SBSFU wiped the SE RAM on its way out. Failure is not fatal: the check
+   * then refuses every header and the device stays in DFU with the installed
+   * image intact, which is the safe outcome. */
+  {
+    SE_StatusTypeDef se_status = SE_KO;
+    if (SE_Startup() == SE_SUCCESS)
+    {
+      (void)SE_Init(&se_status, SystemCoreClock);
+    }
+  }
 
   /* USER CODE END 2 */
 
@@ -437,6 +459,10 @@ int main(void)
       }
       else
       {
+        /* Erase the requested slot pages the image did not reach (the old
+         * image's tail), so SBSFU's blank-slot check accepts the new image. */
+        (void)DFU_Guard_ErasePendingPages();
+
         /* Reboot so SBSFU verifies and launches the freshly flashed firmware.
          * The brief delay lets the final USB control transfer settle and the
          * host tool exit cleanly before the bus drops. delay_ms() is tick-free
@@ -456,6 +482,9 @@ int main(void)
 #ifdef DEBUG_ENABLED
       printf("[BL] host requested reset - leaving USB DFU mode\r\n");
 #endif
+      /* Finish a download the host accepted but did not manifest; a no-op
+       * when no header was accepted, so an abort never erases the image. */
+      (void)DFU_Guard_ErasePendingPages();
       delay_ms(50U);
       NVIC_SystemReset();
     }
@@ -864,6 +893,7 @@ void Error_Handler(void)
   * @param  line: assert_param error line source number
   * @retval None
   */
+// cppcheck-suppress constParameterPointer ; signature fixed by assert_param() in stm32l4xx_hal_conf.h
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */

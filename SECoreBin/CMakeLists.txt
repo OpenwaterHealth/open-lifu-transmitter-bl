@@ -62,6 +62,12 @@ target_compile_definitions(SECoreBin PRIVATE
     USE_HAL_DRIVER
     STM32L443xx
 )
+# Same bootloader variant as the SBSFU target (app_sfu.h is shared and requires it).
+if(LIFU_BL_VARIANT STREQUAL "clinical")
+    target_compile_definitions(SECoreBin PRIVATE LIFU_BL_CLINICAL)
+else()
+    target_compile_definitions(SECoreBin PRIVATE LIFU_BL_RESEARCH)
+endif()
 
 # SECoreBin uses -Os optimization as per the reference project
 target_compile_options(SECoreBin PRIVATE
